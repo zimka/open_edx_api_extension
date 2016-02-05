@@ -22,7 +22,7 @@ from instructor.offline_gradecalc import student_grades
 
 from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
-from student.models import User, CourseEnrollment
+from student.models import User, CourseEnrollment, CourseAccessRole
 from xmodule.modulestore.django import modulestore
 
 from openedx.core.djangoapps.course_groups.cohorts import (is_course_cohorted, is_cohort_exists, add_cohort,
@@ -742,3 +742,39 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
             )
             track_views.server_track(request, "change-email-settings", {"receive_emails": "yes", "course": course_id})
         return Response(status=status.HTTP_200_OK)
+
+
+class Credentials(APIView, ApiKeyPermissionMixIn):
+    """
+        **Use Cases**
+
+            Called from sso when collecting non trivial user credentials
+
+            1. Get the dictionary of credentials for users
+
+        **Example Requests**:
+
+            GET /api/extended/credentials
+
+        **Response Values**
+
+            {
+                "course_id_1": ["user_1_1", "user_1_2", ... , "user_1_n"],
+                ...
+                "course_id_m": ["user_m_1", "user_m_2", ... , "user_m_n"],
+                "staff":  ["user_staff_1", "user_staff_2", ... , "user_staff_n"] // list of Global Staff users
+            }
+    """
+
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser,
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request):
+        global_staff_users = User.objects.filter(is_staff=True)
+        creds = dict()
+        creds['staff'] = [u.username for u in global_staff_users]
+        for course in modulestore().get_courses():
+            course_id = course.id
+            instructors = CourseAccessRole.objects.filter(course_id=course_id, role__in=[u'instructor', u'admin'])
+            creds[course_id.html_id()] = list(set([u.user.username for u in instructors]) - set(creds['staff']))
+        return Response(data=creds)
