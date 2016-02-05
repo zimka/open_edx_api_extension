@@ -14,4 +14,5 @@ urlpatterns = [
     url(r'^libraries/$', views.LibrariesList.as_view()),
     url(r'^paid_mass_enrollment$', views.PaidMassEnrollment.as_view()),
     url(r'^update_verified_cohort$', views.UpdateVerifiedCohort.as_view()),
+    url(r'^subscriptions$', views.Subscriptions.as_view()),
 ]
