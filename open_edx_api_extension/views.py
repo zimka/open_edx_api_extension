@@ -277,6 +277,9 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
     """
         **Use Cases**
 
+            Called from plp by staff from admin panel for update course enrollments for group of students
+            to verified course mode
+
             1. Enroll the list of users to verified course mode
 
         **Example Requests**:
@@ -422,32 +425,14 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
             for username in users:
                 current_username = username
                 api.update_enrollment(username, unicode(course_key), mode=mode, is_active=is_active)
-                previous_cohort_name = None
-                previous_cohort_id = None
                 user = User.objects.get(username=username)
                 course_cohorts = CourseUserGroup.objects.filter(
                     course_id=cohort.course_id,
                     users__id=user.id,
                     group_type=CourseUserGroup.COHORT
                 )
-                if course_cohorts.exists():
-                    if course_cohorts[0] != cohort:
-                        previous_cohort = course_cohorts[0]
-                        previous_cohort.users.remove(user)
-                        previous_cohort_name = previous_cohort.name
-                        previous_cohort_id = previous_cohort.id
 
-                tracker.emit(
-                    "edx.cohort.user_add_requested",
-                    {
-                        "user_id": user.id,
-                        "cohort_id": cohort.id,
-                        "cohort_name": cohort.name,
-                        "previous_cohort_id": previous_cohort_id,
-                        "previous_cohort_name": previous_cohort_name,
-                    }
-                )
-                cohort.users.add(user)
+                add_user_into_verified_cohort(course_cohorts, cohort, user)
 
             email_opt_in = request.DATA.get('email_opt_in', None)
             if email_opt_in is not None:
@@ -508,6 +493,8 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
     """
         **Use Cases**
 
+            Called from plp for all course enrollments updated by user
+
             1. Add user to verified cohort when updating enrollment to verified mode
             2. Remove user from verified cohort when leaving verified mode
 
@@ -567,11 +554,6 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 status=status.HTTP_200_OK,
                 data={"message": u"Course {course_id} is not cohorted.".format(course_id=course_id)}
             )
-        cohort_exists = is_cohort_exists(course_key, VERIFIED)
-        if not cohort_exists:
-            cohort = add_cohort(course_key, VERIFIED, 'manual')
-        else:
-            cohort = get_cohort_by_name(course_key, VERIFIED)
 
         action = request.DATA.get('action')
         if action not in [u'add', u'delete']:
@@ -579,6 +561,18 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 status=status.HTTP_400_BAD_REQUEST,
                 data={"message": u"Available actions are 'add' and 'delete'."}
             )
+
+        cohort_exists = is_cohort_exists(course_key, VERIFIED)
+        if not cohort_exists:
+            if action == u'add':
+                cohort = add_cohort(course_key, VERIFIED, 'manual')
+            else:
+                return Response(
+                    status=status.HTTP_200_OK,
+                    data={"message": u"There aren't cohort verified for {course_id}".format(course_id=course_id)}
+                )
+        else:
+            cohort = get_cohort_by_name(course_key, VERIFIED)
 
         enrollment = CourseEnrollment.objects.get(
             user__username=username, course_id=course_key
@@ -618,9 +612,6 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                     )}
                 )
 
-        # add user into verified cohort
-        previous_cohort_name = None
-        previous_cohort_id = None
         if course_cohorts.exists():
             if course_cohorts[0] == cohort:
                 return Response(
@@ -630,23 +621,9 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                         cohort_name=cohort.name
                     )}
                 )
-            else:
-                previous_cohort = course_cohorts[0]
-                previous_cohort.users.remove(user)
-                previous_cohort_name = previous_cohort.name
-                previous_cohort_id = previous_cohort.id
 
-        tracker.emit(
-            "edx.cohort.user_add_requested",
-            {
-                "user_id": user.id,
-                "cohort_id": cohort.id,
-                "cohort_name": cohort.name,
-                "previous_cohort_id": previous_cohort_id,
-                "previous_cohort_name": previous_cohort_name,
-            }
-        )
-        cohort.users.add(user)
+        add_user_into_verified_cohort(course_cohorts, cohort, user)
+
         return Response(
             status=status.HTTP_200_OK,
             data={"message": u"User {username} added to cohort {cohort_name}".format(
@@ -654,4 +631,27 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 cohort_name=cohort.name
             )}
         )
+
+
+def add_user_into_verified_cohort(course_cohorts, cohort, user):
+    previous_cohort_name = None
+    previous_cohort_id = None
+    if course_cohorts.exists():
+        if course_cohorts[0] != cohort:
+            previous_cohort = course_cohorts[0]
+            previous_cohort.users.remove(user)
+            previous_cohort_name = previous_cohort.name
+            previous_cohort_id = previous_cohort.id
+
+    tracker.emit(
+        "edx.cohort.user_add_requested",
+        {
+            "user_id": user.id,
+            "cohort_id": cohort.id,
+            "cohort_name": cohort.name,
+            "previous_cohort_id": previous_cohort_id,
+            "previous_cohort_name": previous_cohort_name,
+        }
+    )
+    cohort.users.add(user)
 
