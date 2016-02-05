@@ -9,6 +9,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
 
+from bulk_email.models import Optout
+
 from cors_csrf.decorators import ensure_csrf_cookie_cross_domain
 from course_modes.models import CourseMode
 from course_structure_api.v0 import serializers
@@ -42,6 +44,7 @@ from enrollment.errors import (
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
 
 from eventtracking import tracker
+from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
 from .data import get_course_enrollments, get_user_proctored_exams
@@ -655,3 +658,87 @@ def add_user_into_verified_cohort(course_cohorts, cohort, user):
     )
     cohort.users.add(user)
 
+
+class Subscriptions(APIView, ApiKeyPermissionMixIn):
+    """
+        **Use Cases**
+
+            Called from plp when user change subscriptions parameters
+
+            1. Subscribe user to course news
+            2. Unsubscribe user to course news
+
+        **Example Requests**:
+
+            POST /api/extended/subscriptions{
+                "course_id": "course-v1:edX+DemoX+Demo_Course",
+                "username": "john_doe",
+                "do_subscribe": True
+            }
+
+        **Post Parameters**
+
+            * course_id: The unique identifier for the course.
+
+            * username: The unique user id in plp and edx
+
+            * do_subscribe: True or False
+
+        **Response Values**
+
+            200 - OK, 400 - Fail (with error message)
+    """
+
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, EnrollmentCrossDomainSessionAuth
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def post(self, request):
+        """Modify user's setting for receiving emails from a course."""
+        username = request.DATA.get('username')
+        try:
+            user = User.objects.get(username=username)
+        except ObjectDoesNotExist:
+            return Response(
+                status=status.HTTP_400_BAD_REQUEST,
+                data={"message": u"User {username} does not exist".format(username=username)}
+            )
+
+        course_id = request.DATA.get('course_id')
+        if not course_id:
+            return Response(
+                status=status.HTTP_400_BAD_REQUEST,
+                data={"message": u"Course ID must be specified."}
+            )
+
+        try:
+            course_key = CourseKey.from_string(course_id)
+        except InvalidKeyError:
+            return Response(
+                status=status.HTTP_400_BAD_REQUEST,
+                data={
+                    "message": u"No course '{course_id}' found".format(course_id=course_id)
+                }
+            )
+
+        receive_emails = request.POST.get("do_subscribe")
+        if receive_emails:
+            optout_object = Optout.objects.filter(user=user, course_id=course_key)
+            if optout_object:
+                optout_object.delete()
+            log.info(
+                u"User %s (%s) opted in to receive emails from course %s",
+                user.username,
+                user.email,
+                course_id
+            )
+            track_views.server_track(request, "change-email-settings", {"receive_emails": "no", "course": course_id})
+        else:
+            Optout.objects.get_or_create(user=user, course_id=course_key)
+            log.info(
+                u"User %s (%s) opted out of receiving emails from course %s",
+                user.username,
+                user.email,
+                course_id
+            )
+            track_views.server_track(request, "change-email-settings", {"receive_emails": "yes", "course": course_id})
+        return Response(status=status.HTTP_200_OK)
