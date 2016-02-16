@@ -582,13 +582,22 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
             user__username=username, course_id=course_key
         )
         if not enrollment or not enrollment.is_active:
-            return Response(
-                status=status.HTTP_400_BAD_REQUEST,
-                data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
-                    username=username,
-                    course_id=course_id
-                )}
-            )
+            if action == u'add':
+                return Response(
+                    status=status.HTTP_400_BAD_REQUEST,
+                    data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
+                        username=username,
+                        course_id=course_id
+                    )}
+                )
+            if action == u'delete':
+                return Response(
+                    status=status.HTTP_200_OK,
+                    data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
+                        username=username,
+                        course_id=course_id
+                    )}
+                )
 
         course_cohorts = CourseUserGroup.objects.filter(
             course_id=course_key,
@@ -674,7 +683,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
             POST /api/extended/subscriptions{
                 "course_id": "course-v1:edX+DemoX+Demo_Course",
                 "username": "john_doe",
-                "do_subscribe": True
+                "subscribe": True
             }
 
         **Post Parameters**
@@ -721,7 +730,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 }
             )
 
-        receive_emails = request.POST.get("do_subscribe")
+        receive_emails = request.DATA.get("subscribe")
         if receive_emails:
             optout_object = Optout.objects.filter(user=user, course_id=course_key)
             if optout_object:
