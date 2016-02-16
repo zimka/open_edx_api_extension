@@ -581,13 +581,22 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
             user__username=username, course_id=course_key
         )
         if not enrollment or not enrollment.is_active:
-            return Response(
-                status=status.HTTP_400_BAD_REQUEST,
-                data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
-                    username=username,
-                    course_id=course_id
-                )}
-            )
+            if action == u'add':
+                return Response(
+                    status=status.HTTP_400_BAD_REQUEST,
+                    data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
+                        username=username,
+                        course_id=course_id
+                    )}
+                )
+            if action == u'delete':
+                return Response(
+                    status=status.HTTP_200_OK,
+                    data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
+                        username=username,
+                        course_id=course_id
+                    )}
+                )
 
         course_cohorts = CourseUserGroup.objects.filter(
             course_id=course_key,
