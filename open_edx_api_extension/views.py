@@ -674,7 +674,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
             POST /api/extended/subscriptions{
                 "course_id": "course-v1:edX+DemoX+Demo_Course",
                 "username": "john_doe",
-                "do_subscribe": True
+                "subscribe": True
             }
 
         **Post Parameters**
@@ -721,7 +721,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 }
             )
 
-        receive_emails = request.POST.get("do_subscribe")
+        receive_emails = request.DATA.get("subscribe")
         if receive_emails:
             optout_object = Optout.objects.filter(user=user, course_id=course_key)
             if optout_object:
