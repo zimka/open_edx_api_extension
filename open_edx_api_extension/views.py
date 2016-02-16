@@ -17,6 +17,7 @@ from course_structure_api.v0 import serializers
 from course_structure_api.v0.views import CourseViewMixin
 from courseware import courses
 
+from django_comment_common.models import Role, FORUM_ROLE_STUDENT
 from embargo import api as embargo_api
 from instructor.offline_gradecalc import student_grades
 
@@ -682,7 +683,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
             POST /api/extended/subscriptions{
                 "course_id": "course-v1:edX+DemoX+Demo_Course",
                 "username": "john_doe",
-                "do_subscribe": True
+                "subscribe": True
             }
 
         **Post Parameters**
@@ -729,7 +730,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 }
             )
 
-        receive_emails = request.POST.get("do_subscribe")
+        receive_emails = request.DATA.get("subscribe")
         if receive_emails:
             optout_object = Optout.objects.filter(user=user, course_id=course_key)
             if optout_object:
@@ -782,8 +783,15 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
         global_staff_users = User.objects.filter(is_staff=True)
         creds = dict()
         creds['staff'] = [u.username for u in global_staff_users]
+        creds['discussions'] = dict()
         for course in modulestore().get_courses():
             course_id = course.id
-            instructors = CourseAccessRole.objects.filter(course_id=course_id, role__in=[u'instructor', u'admin'])
+            instructors = CourseAccessRole.objects.filter(course_id=course_id, role__in=[u'instructor', u'admin', u'staff'])
             creds[course_id.html_id()] = list(set([u.user.username for u in instructors]) - set(creds['staff']))
+            roles = Role.objects.exclude(name=FORUM_ROLE_STUDENT).filter(course_id=course_id)
+            if roles:
+                creds['discussions'][course_id.html_id()] = dict()
+                for role in roles:
+                    creds['discussions'][course_id.html_id()][role.name] = [u.username for u in role.users.all()]
         return Response(data=creds)
+
