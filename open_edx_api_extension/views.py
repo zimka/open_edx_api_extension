@@ -784,10 +784,15 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
         creds = dict()
         creds['staff'] = [u.username for u in global_staff_users]
         creds['discussions'] = dict()
+        creds['unenrolled'] = dict()
         for course in modulestore().get_courses():
             course_id = course.id
             instructors = CourseAccessRole.objects.filter(course_id=course_id, role__in=[u'instructor', u'admin', u'staff'])
             creds[course_id.html_id()] = list(set([u.user.username for u in instructors]) - set(creds['staff']))
+            ce = CourseEnrollment.objects.filter(course_id=course_id, is_active=True).values_list("user__username", flat=True)
+            unenrolled = list(set(creds[course_id.html_id()]) - set(ce))
+            if len(unenrolled) > 0:
+                creds['unenrolled'][course_id.html_id()] = unenrolled
             roles = Role.objects.exclude(name=FORUM_ROLE_STUDENT).filter(course_id=course_id)
             if roles:
                 creds['discussions'][course_id.html_id()] = dict()
