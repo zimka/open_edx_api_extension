@@ -68,6 +68,15 @@ def get_user_proctored_exams(username, request):
                     item_id = UsageKey.from_string(exam['content_id'])
                     item = modulestore().get_item(item_id)
                     exam['visible_to_staff_only'] = item.visible_to_staff_only
+                    oldest = None
+                    due_dates = []
+                    for vertical in item.get_children():
+                        if vertical.due:
+                            due_dates.append(vertical.due)
+                    if due_dates:
+                        oldest = min(due_dates)
+                    exam['deadline'] = oldest
+                    exam['start'] = item.start
                     result[course_id]['exams'].append(exam)
             result = {key: value for key, value in result.items() if
                       len(value['exams']) > 0}
