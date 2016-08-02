@@ -29,7 +29,7 @@ def get_course_enrollments(user_id=None, **kwargs):
 def get_user_proctored_exams(username, request):
     enrollments = CourseEnrollment.objects.filter(is_active=True,
                                                   user__username=username)
-    system = request.DATA.get('system')
+    system = request.data.get('system')
     result = {}
     for enrollment in enrollments:
         course = enrollment.course

@@ -38,7 +38,7 @@ from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticat
 
 from enrollment import api
 from enrollment.errors import (
-    CourseNotFoundError, CourseEnrollmentError,
+    CourseEnrollmentError,
     CourseModeNotFoundError, CourseEnrollmentExistsError
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
@@ -169,7 +169,7 @@ class CourseListMixin(object):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def get_queryset(self):
-        course_ids = self.request.QUERY_PARAMS.get('course_id', None)
+        course_ids = self.request.query_params.get('course_id', None)
 
         results = []
         if course_ids:
@@ -328,7 +328,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
         """
         # Get the users, Course ID, and Mode from the request.
 
-        users = request.DATA.get('users', [])
+        users = request.data.get('users', [])
 
         if len(users) == 0:
             return Response(
@@ -336,7 +336,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"Users must be specified to create a new enrollment."}
             )
 
-        course_id = request.DATA.get('course_details', {}).get('course_id')
+        course_id = request.data.get('course_details', {}).get('course_id')
 
         if not course_id:
             return Response(
@@ -353,7 +353,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
             )
 
         # use verified course mode by default
-        mode = request.DATA.get('mode', CourseMode.VERIFIED)
+        mode = request.data.get('mode', CourseMode.VERIFIED)
 
         bad_users = []
         list_users = []
@@ -378,7 +378,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
 
         current_username = None
         try:
-            is_active = request.DATA.get('is_active')
+            is_active = request.data.get('is_active')
             # Check if the requested activation status is None or a Boolean
             if is_active is not None and not isinstance(is_active, bool):
                 return Response(
@@ -386,7 +386,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
                     data={'message': u"'{value}' is an invalid enrollment activation status.".format(value=is_active)}
                 )
 
-            enrollment_attributes = request.DATA.get('enrollment_attributes')
+            enrollment_attributes = request.data.get('enrollment_attributes')
             errors = False
             already_paid = []  # list of users with verified enrollment
             not_enrolled = []  # list of not enrolled yet or unenrolled users
@@ -436,7 +436,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
 
                 add_user_into_verified_cohort(course_cohorts, cohort, user)
 
-            email_opt_in = request.DATA.get('email_opt_in', None)
+            email_opt_in = request.data.get('email_opt_in', None)
             if email_opt_in is not None:
                 org = course_key.org
                 for username in users:
@@ -456,13 +456,6 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
                     ).format(mode="verified", course_id=course_id),
                     "course_details": error.data
                 })
-        except CourseNotFoundError:
-            return Response(
-                status=status.HTTP_400_BAD_REQUEST,
-                data={
-                    "message": u"No course '{course_id}' found for enrollment".format(course_id=course_id)
-                }
-            )
         except CourseEnrollmentExistsError as error:
             return Response(data=error.enrollment)
         except CourseEnrollmentError:
@@ -525,7 +518,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def post(self, request):
-        username = request.DATA.get('username')
+        username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
         except ObjectDoesNotExist:
@@ -534,7 +527,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"User {username} does not exist".format(username=username)}
             )
 
-        course_id = request.DATA.get('course_id')
+        course_id = request.data.get('course_id')
         if not course_id:
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
@@ -557,7 +550,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"Course {course_id} is not cohorted.".format(course_id=course_id)}
             )
 
-        action = request.DATA.get('action')
+        action = request.data.get('action')
         if action not in [u'add', u'delete']:
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
@@ -702,7 +695,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
 
     def post(self, request):
         """Modify user's setting for receiving emails from a course."""
-        username = request.DATA.get('username')
+        username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
         except ObjectDoesNotExist:
@@ -711,7 +704,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"User {username} does not exist".format(username=username)}
             )
 
-        course_id = request.DATA.get('course_id')
+        course_id = request.data.get('course_id')
         if not course_id:
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
@@ -728,7 +721,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 }
             )
 
-        receive_emails = request.DATA.get("subscribe")
+        receive_emails = request.data.get("subscribe")
         if receive_emails:
             optout_object = Optout.objects.filter(user=user, course_id=course_key)
             if optout_object:
