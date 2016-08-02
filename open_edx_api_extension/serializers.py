@@ -9,10 +9,9 @@ from edx_proctoring.api import get_all_exams_for_course
 from course_structure_api.v0.serializers import CourseSerializer
 
 
-
 class CourseWithExamsSerializer(CourseSerializer):
-    proctored_exams = serializers.SerializerMethodField("get_proctored_exams")
-    regular_exams = serializers.SerializerMethodField("get_regular_exams")
+    #proctored_exams = serializers.SerializerMethodField("get_proctored_exams")
+    #regular_exams = serializers.SerializerMethodField("get_regular_exams")
 
     def __init__(self, *args, **kwargs):
         self.include_expired = kwargs.pop("include_expired", False)
