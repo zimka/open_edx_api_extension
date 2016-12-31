@@ -38,10 +38,6 @@ def get_user_proctored_exams(username, request):
         except AttributeError:
             continue
 
-        proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).proctoring_service
-        if system and system != proctoring_service:
-            continue
-
         cohorts = CourseUserGroup.objects.filter(
             course_id=enrollment.course_id,
             users__username=username,
@@ -50,6 +46,9 @@ def get_user_proctored_exams(username, request):
         )
 
         if course_id not in result and cohorts.exists():
+            proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).proctoring_service
+            if system and system != proctoring_service:
+                continue
             result[course_id] = {
                 "id": course_id,
                 "name": course.display_name,
