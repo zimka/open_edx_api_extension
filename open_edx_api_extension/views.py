@@ -26,8 +26,9 @@ from opaque_keys import InvalidKeyError
 from student.models import User, CourseEnrollment, CourseAccessRole
 from xmodule.modulestore.django import modulestore
 
-from openedx.core.djangoapps.course_groups.cohorts import (is_course_cohorted, is_cohort_exists, add_cohort,
-                                                           get_cohort_by_name)
+from openedx.core.djangoapps.course_groups.cohorts import (
+    is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
+)
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
 from openedx.core.lib.api.authentication import (
@@ -607,7 +608,13 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                     )}
                 )
             else:
-                cohort.users.remove(user)
+                try:
+                    remove_user_from_cohort(cohort, username)
+                except ValueError:
+                    log.warning(u"User {username} already removed from cohort {cohort_name}".format(
+                        username=username,
+                        cohort_name=cohort.name
+                    ))
                 return Response(
                     status=status.HTTP_200_OK,
                     data={"message": u"User {username} removed from cohort {cohort_name}".format(
@@ -638,26 +645,10 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
 
 
 def add_user_into_verified_cohort(course_cohorts, cohort, user):
-    previous_cohort_name = None
-    previous_cohort_id = None
-    if course_cohorts.exists():
-        if course_cohorts[0] != cohort:
-            previous_cohort = course_cohorts[0]
-            previous_cohort.users.remove(user)
-            previous_cohort_name = previous_cohort.name
-            previous_cohort_id = previous_cohort.id
-
-    tracker.emit(
-        "edx.cohort.user_add_requested",
-        {
-            "user_id": user.id,
-            "cohort_id": cohort.id,
-            "cohort_name": cohort.name,
-            "previous_cohort_id": previous_cohort_id,
-            "previous_cohort_name": previous_cohort_name,
-        }
-    )
-    cohort.users.add(user)
+    try:
+        add_user_to_cohort(cohort, user.username)
+    except ValueError:
+        log.warning("User {} already present in the cohort {}".format(user.username, cohort.name))
 
 
 class Subscriptions(APIView, ApiKeyPermissionMixIn):
