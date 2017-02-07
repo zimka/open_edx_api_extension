@@ -2,6 +2,7 @@ import logging
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
+from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 
 from rest_framework.generics import RetrieveAPIView, ListAPIView
@@ -48,7 +49,8 @@ from eventtracking import tracker
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
-from .data import get_course_enrollments, get_user_proctored_exams
+from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
+
 
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
@@ -782,3 +784,28 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
                     creds['discussions'][course_id.html_id()][role.name] = [u.username for u in role.users.all()]
         return Response(data=creds)
 
+
+class CourseCalendar(APIView, ApiKeyPermissionMixIn):
+    """
+        **Use Cases**
+            Allow to get iCalendar file with course deadlines
+
+
+        **Example Requests**:
+
+            GET /api/extended/calendar/{course-key-string}
+
+        **Response Values**
+            iCalendar file
+
+    """
+    authentication_classes = (SessionAuthenticationAllowInactiveUser,
+                              OAuth2AuthenticationAllowInactiveUser)
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request, course_key_string):
+        text = get_course_calendar(request, course_key_string)
+        mime = "text/calendar"
+        response = HttpResponse(text, content_type=mime, status=200)
+        response['Content-Disposition'] = 'attachment; filename="{}_calendar.ics"'.format(course_key_string)
+        return response

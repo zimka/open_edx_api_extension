@@ -1,11 +1,15 @@
+import logging
+from datetime import timedelta
+
 from django.core.urlresolvers import reverse
+from django.conf import settings
 from edx_proctoring.api import get_all_exams_for_course
-from student.models import CourseEnrollment
-from xmodule.modulestore.django import modulestore
 from enrollment.serializers import CourseEnrollmentSerializer
+from lms.djangoapps.courseware.access import has_access
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from opaque_keys.edx.keys import CourseKey, UsageKey
-
+from student.models import CourseEnrollment
+from xmodule.modulestore.django import modulestore
 
 VERIFIED = 'verified'
 
@@ -80,4 +84,53 @@ def get_user_proctored_exams(username, request):
             result = {key: value for key, value in result.items() if
                       len(value['exams']) > 0}
     return result
+
+
+def get_course_calendar(request, course_key_string):
+    try:
+        from icalendar import Calendar, Event
+    except ImportError:
+        logging.error("Calendar module not installed")
+        return
+
+    course_key = CourseKey.from_string(course_key_string)
+    user = request.user
+    checked = ["course", "vertical", "sequential"]
+    items = modulestore().get_items(course_key)
+    hour = timedelta(hours=1)
+
+    cal = Calendar()
+    for num, item in enumerate(items):
+        if not item.category in checked:
+            continue
+        if not item.graded:
+            continue
+        if not has_access(user, "load", item, course_key=item.location):
+            continue
+        if not item.due:
+            continue
+        if item.category != 'course':
+            format = item.format or item.get_parent().format
+        else:
+            format = 'course'
+        url = u'http://{}{}'.format(settings.SITE_NAME, _reverse_usage(item))
+        event = Event()
+        summary = u"Type: {}; Name: {}({})".format(format, item.display_name, url).encode('utf-8')
+        event.add('summary', summary)
+        event.add('dtstart', item.due - hour)
+        event.add('dtend', item.due)
+        cal.add_component(event)
+    text = cal.to_ical().decode('utf-8')
+    return text
+
+
+def _reverse_usage(item):
+    from lms.djangoapps.courseware.url_helpers import get_redirect_url
+    course_key = item.location.course_key
+    url = get_redirect_url(course_key, item.location)
+    try:
+        url = url.split('?')[0]
+    except AttributeError:
+        pass
+    return url
 
