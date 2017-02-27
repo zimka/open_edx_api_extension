@@ -26,20 +26,20 @@ from opaque_keys import InvalidKeyError
 from student.models import User, CourseEnrollment, CourseAccessRole
 from xmodule.modulestore.django import modulestore
 
-from openedx.core.djangoapps.course_groups.cohorts import (is_course_cohorted, is_cohort_exists, add_cohort,
-                                                           get_cohort_by_name)
+from openedx.core.djangoapps.course_groups.cohorts import (
+    is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
+)
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
 from openedx.core.lib.api.authentication import (
     SessionAuthenticationAllowInactiveUser,
     OAuth2AuthenticationAllowInactiveUser,
 )
-from openedx.core.lib.api.serializers import PaginationSerializer
 from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated
 
 from enrollment import api
 from enrollment.errors import (
-    CourseNotFoundError, CourseEnrollmentError,
+    CourseEnrollmentError,
     CourseModeNotFoundError, CourseEnrollmentExistsError
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
@@ -163,7 +163,6 @@ class CourseListMixin(object):
     lookup_field = 'course_id'
     paginate_by = 10000
     paginate_by_param = 'page_size'
-    pagination_serializer_class = PaginationSerializer
     serializer_class = serializers.CourseSerializer
     # Using EDX_API_KEY for access to this api
     authentication_classes = (SessionAuthenticationAllowInactiveUser,
@@ -171,7 +170,7 @@ class CourseListMixin(object):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def get_queryset(self):
-        course_ids = self.request.QUERY_PARAMS.get('course_id', None)
+        course_ids = self.request.query_params.get('course_id', None)
 
         results = []
         if course_ids:
@@ -323,14 +322,14 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
     authentication_classes = OAuth2AuthenticationAllowInactiveUser, EnrollmentCrossDomainSessionAuth
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
-    @transaction.commit_on_success
+    @transaction.atomic
     def post(self, request):
         """
         Enrolls the list of users in a verified course mode.
         """
         # Get the users, Course ID, and Mode from the request.
 
-        users = request.DATA.get('users', [])
+        users = request.data.get('users', [])
 
         if len(users) == 0:
             return Response(
@@ -338,7 +337,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"Users must be specified to create a new enrollment."}
             )
 
-        course_id = request.DATA.get('course_details', {}).get('course_id')
+        course_id = request.data.get('course_details', {}).get('course_id')
 
         if not course_id:
             return Response(
@@ -355,7 +354,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
             )
 
         # use verified course mode by default
-        mode = request.DATA.get('mode', CourseMode.VERIFIED)
+        mode = request.data.get('mode', CourseMode.VERIFIED)
 
         bad_users = []
         list_users = []
@@ -380,7 +379,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
 
         current_username = None
         try:
-            is_active = request.DATA.get('is_active')
+            is_active = request.data.get('is_active')
             # Check if the requested activation status is None or a Boolean
             if is_active is not None and not isinstance(is_active, bool):
                 return Response(
@@ -388,7 +387,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
                     data={'message': u"'{value}' is an invalid enrollment activation status.".format(value=is_active)}
                 )
 
-            enrollment_attributes = request.DATA.get('enrollment_attributes')
+            enrollment_attributes = request.data.get('enrollment_attributes')
             errors = False
             already_paid = []  # list of users with verified enrollment
             not_enrolled = []  # list of not enrolled yet or unenrolled users
@@ -438,7 +437,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
 
                 add_user_into_verified_cohort(course_cohorts, cohort, user)
 
-            email_opt_in = request.DATA.get('email_opt_in', None)
+            email_opt_in = request.data.get('email_opt_in', None)
             if email_opt_in is not None:
                 org = course_key.org
                 for username in users:
@@ -458,13 +457,6 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
                     ).format(mode="verified", course_id=course_id),
                     "course_details": error.data
                 })
-        except CourseNotFoundError:
-            return Response(
-                status=status.HTTP_400_BAD_REQUEST,
-                data={
-                    "message": u"No course '{course_id}' found for enrollment".format(course_id=course_id)
-                }
-            )
         except CourseEnrollmentExistsError as error:
             return Response(data=error.enrollment)
         except CourseEnrollmentError:
@@ -527,7 +519,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def post(self, request):
-        username = request.DATA.get('username')
+        username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
         except ObjectDoesNotExist:
@@ -536,7 +528,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"User {username} does not exist".format(username=username)}
             )
 
-        course_id = request.DATA.get('course_id')
+        course_id = request.data.get('course_id')
         if not course_id:
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
@@ -559,7 +551,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"Course {course_id} is not cohorted.".format(course_id=course_id)}
             )
 
-        action = request.DATA.get('action')
+        action = request.data.get('action')
         if action not in [u'add', u'delete']:
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
@@ -616,7 +608,13 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                     )}
                 )
             else:
-                cohort.users.remove(user)
+                try:
+                    remove_user_from_cohort(cohort, username)
+                except ValueError:
+                    log.warning(u"User {username} already removed from cohort {cohort_name}".format(
+                        username=username,
+                        cohort_name=cohort.name
+                    ))
                 return Response(
                     status=status.HTTP_200_OK,
                     data={"message": u"User {username} removed from cohort {cohort_name}".format(
@@ -647,26 +645,10 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
 
 
 def add_user_into_verified_cohort(course_cohorts, cohort, user):
-    previous_cohort_name = None
-    previous_cohort_id = None
-    if course_cohorts.exists():
-        if course_cohorts[0] != cohort:
-            previous_cohort = course_cohorts[0]
-            previous_cohort.users.remove(user)
-            previous_cohort_name = previous_cohort.name
-            previous_cohort_id = previous_cohort.id
-
-    tracker.emit(
-        "edx.cohort.user_add_requested",
-        {
-            "user_id": user.id,
-            "cohort_id": cohort.id,
-            "cohort_name": cohort.name,
-            "previous_cohort_id": previous_cohort_id,
-            "previous_cohort_name": previous_cohort_name,
-        }
-    )
-    cohort.users.add(user)
+    try:
+        add_user_to_cohort(cohort, user.username)
+    except ValueError:
+        log.warning("User {} already present in the cohort {}".format(user.username, cohort.name))
 
 
 class Subscriptions(APIView, ApiKeyPermissionMixIn):
@@ -704,7 +686,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
 
     def post(self, request):
         """Modify user's setting for receiving emails from a course."""
-        username = request.DATA.get('username')
+        username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
         except ObjectDoesNotExist:
@@ -713,7 +695,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 data={"message": u"User {username} does not exist".format(username=username)}
             )
 
-        course_id = request.DATA.get('course_id')
+        course_id = request.data.get('course_id')
         if not course_id:
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
@@ -730,7 +712,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
                 }
             )
 
-        receive_emails = request.DATA.get("subscribe")
+        receive_emails = request.data.get("subscribe")
         if receive_emails:
             optout_object = Optout.objects.filter(user=user, course_id=course_key)
             if optout_object:
