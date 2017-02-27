@@ -54,3 +54,19 @@ Used EDX_API_KEY for access to this API
 
 See original documentation for other attributes and usage:
 http://edx-platform-api.readthedocs.org/en/latest/enrollment/enrollment.html#enrollment.views.EnrollmentView
+
+
+### User Grade Lists
+
+/api/extended/calculate_grades_csv/$course_id/?usernames=["name1","name2"]
+
+Generates grade lists for given username for given course_id.
+You can define custom storage for reports:
+
+```python
+CUSTOM_GRADES_DOWNLOAD = {
+    'STORAGE_TYPE': 'localfs',
+    'BUCKET': 'edx-grades',
+    'ROOT_PATH': '/tmp/edx-s3/custom_grades',
+}
+```
