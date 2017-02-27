@@ -29,17 +29,13 @@ def get_course_enrollments(user_id=None, **kwargs):
 def get_user_proctored_exams(username, request):
     enrollments = CourseEnrollment.objects.filter(is_active=True,
                                                   user__username=username)
-    system = request.DATA.get('system')
+    system = request.data.get('system')
     result = {}
     for enrollment in enrollments:
         course = enrollment.course
         try:
             course_id = str(course.id)
         except AttributeError:
-            continue
-
-        proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).proctoring_service
-        if system and system != proctoring_service:
             continue
 
         cohorts = CourseUserGroup.objects.filter(
@@ -50,6 +46,9 @@ def get_user_proctored_exams(username, request):
         )
 
         if course_id not in result and cohorts.exists():
+            proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).proctoring_service
+            if system and system != proctoring_service:
+                continue
             result[course_id] = {
                 "id": course_id,
                 "name": course.display_name,
