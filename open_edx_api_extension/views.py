@@ -1,6 +1,7 @@
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.conf import settings
 from django.db import transaction
 from django.utils.decorators import method_decorator
 
@@ -35,7 +36,7 @@ from openedx.core.lib.api.authentication import (
     SessionAuthenticationAllowInactiveUser,
     OAuth2AuthenticationAllowInactiveUser,
 )
-from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated
+from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated, ApiKeyHeaderPermission
 
 from enrollment import api
 from enrollment.errors import (
@@ -53,6 +54,11 @@ from .data import get_course_enrollments, get_user_proctored_exams
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
+try:
+    from edx_proctoring.models import ProctoredExamStudentAttempt
+    from edx_proctoring.api import remove_exam_attempt
+except ImportError:
+    ProctoredExamStudentAttempt = None
 
 class LibrariesList(ListAPIView):
     """
@@ -782,3 +788,66 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
                     creds['discussions'][course_id.html_id()][role.name] = [u.username for u in role.users.all()]
         return Response(data=creds)
 
+
+def check_proctored_exams_attempt_turn_on(method):
+    """
+    Checks that option is turned on
+    :param method:
+    :return:
+    """
+    def dummy_api(*args, **kwargs):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if not (ProctoredExamStudentAttempt and settings.FEATURES.get("PROCTORED_EXAMS_ATTEMPT_DELETE", False)):
+        return dummy_api
+    return method
+
+
+class ProctoredExamsAttempt(APIView):
+    """
+        **Use Cases**
+
+        Allow to delete ExamAttempt for given user
+
+
+        **Example Requests**:
+
+            DELETE /api/extended/user_proctored_exam_attempt/A9597706-BB17-47A8-84BB-16F779FEB771/{
+                "user_id": "1",
+            }
+
+        **Post Parameters**
+
+            * user_id: The unique user id in plp and edx
+
+
+        **Response Values**
+
+            200 - OK, 404 - turned off, 400 - Fail (with error message), 500 - Failed for found user and attempt
+
+
+    """
+    authentication_classes = (SessionAuthenticationAllowInactiveUser,
+                              OAuth2AuthenticationAllowInactiveUser)
+    permission_classes = ApiKeyHeaderPermission,
+
+    @check_proctored_exams_attempt_turn_on
+    def delete(self, request, attempt_code):
+        try:
+            attempt = ProctoredExamStudentAttempt.objects.get_exam_attempt_by_code(attempt_code)
+        except Exception as e:
+            logging.error("Wrong proctored exam attempt code: {}; Exception: {}".format(attempt_code, str(e)))
+            return Response(data={"message":"Wrong attempt_code"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user_id = request.data.get("user_id")
+            user_id = int(user_id)
+            user = User.objects.get(id=user_id)
+        except Exception as e:
+            logging.error("Wrong user id; Exception: {}".format(str(e)))
+            return Response(data={"message": "Wrong user_id"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            remove_exam_attempt(attempt_id=attempt.id, requesting_user=user)
+        except:
+            return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(status=200)

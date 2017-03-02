@@ -54,3 +54,14 @@ Used EDX_API_KEY for access to this API
 
 See original documentation for other attributes and usage:
 http://edx-platform-api.readthedocs.org/en/latest/enrollment/enrollment.html#enrollment.views.EnrollmentView
+
+
+### Proctored Exams Attempts
+
+/api/extended/user_proctored_exam_attempt/$ATTEMPT_CODE/
+
+To turn on set FEATURES["PROCTORED_EXAMS_ATTEMPT_DELETE"].
+
+Deletes users exam attempt.
+Used EDX_API_KEY for access to this API.
+
