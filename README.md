@@ -60,7 +60,7 @@ http://edx-platform-api.readthedocs.org/en/latest/enrollment/enrollment.html#enr
 
 /api/extended/user_proctored_exam_attempt/$ATTEMPT_CODE/
 
-To turn on set FEATURES["PROCTORED_EXAMS_ATTEMPT_DELETE"].
+To turn on set FEATURES["PROCTORED_EXAMS_ATTEMPT_DELETE"]. It must be set up both in LMS and CMS.
 
 Deletes users exam attempt.
 Used EDX_API_KEY for access to this API.

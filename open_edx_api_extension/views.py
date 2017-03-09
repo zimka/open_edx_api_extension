@@ -831,13 +831,27 @@ class ProctoredExamsAttempt(APIView):
                               OAuth2AuthenticationAllowInactiveUser)
     permission_classes = ApiKeyHeaderPermission,
 
+    @staticmethod
+    def is_allowed_for_session(attempt):
+        course_id = attempt.proctored_exam.course_id
+        course_key = CourseKey.from_string(course_id)
+        try:
+            course = modulestore().get_course(course_key)
+        except Exception as e:
+            logging.error("API get course for id {id} error; Traceback:{err}".format(id=str(course_id),err=str(e)))
+            return False
+        return getattr(course, "allow_deleting_proctoring_attempts", False)
+
     @check_proctored_exams_attempt_turn_on
     def delete(self, request, attempt_code):
         try:
             attempt = ProctoredExamStudentAttempt.objects.get_exam_attempt_by_code(attempt_code)
         except Exception as e:
             logging.error("Wrong proctored exam attempt code: {}; Exception: {}".format(attempt_code, str(e)))
-            return Response(data={"message":"Wrong attempt_code"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(data={"message": "Wrong attempt_code"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not self.is_allowed_for_session(attempt):
+            return Response(status=status.HTTP_404_NOT_FOUND)
 
         try:
             user_id = request.data.get("user_id")
