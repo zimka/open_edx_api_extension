@@ -1,6 +1,7 @@
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponse
 from django.utils.decorators import method_decorator
@@ -793,10 +794,15 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
 
         **Example Requests**:
 
-            GET /api/extended/calendar/{course-key-string}
+            GET /api/extended/calendar/{course_key_string}/
+
+        **Post Parameters**
+
+            * user_id: User unique identifier. Optional. Works only if request.user is staff
 
         **Response Values**
-            iCalendar file
+
+            200 - iCalendar file, 400 - bad user_id, 403 - non-staff user requests calendar for other user
 
     """
     authentication_classes = (SessionAuthenticationAllowInactiveUser,
@@ -804,7 +810,23 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def get(self, request, course_key_string):
-        text = get_course_calendar(request, course_key_string)
+        if not settings.FEATURES["ICALENDAR_DUE_API"]:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        user_id = request.GET.get("user_id", None)
+        if user_id:
+            try:
+                if request.user.is_staff:
+                    user = User.objects.get(id=int(user_id))
+                else:
+                    return Response(status=status.HTTP_403_FORBIDDEN,
+                                    data={"message": "Must be staff to request other user's calendar"})
+            except:
+                return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Wrong user id"})
+        else:
+            user = request.user
+
+        text = get_course_calendar(user, course_key_string)
         mime = "text/calendar"
         response = HttpResponse(text, content_type=mime, status=200)
         response['Content-Disposition'] = 'attachment; filename="{}_calendar.ics"'.format(course_key_string)

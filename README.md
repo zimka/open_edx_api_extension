@@ -54,3 +54,10 @@ Used EDX_API_KEY for access to this API
 
 See original documentation for other attributes and usage:
 http://edx-platform-api.readthedocs.org/en/latest/enrollment/enrollment.html#enrollment.views.EnrollmentView
+
+### ICalendar due
+
+GET /api/extended/calendar/{course_key_string}/
+
+Returns ICalendar with course due dates for requser.user or given user_id.
+Feature ICALENDAR_DUE_API must be set up in settings.

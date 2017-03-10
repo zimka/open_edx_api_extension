@@ -86,7 +86,7 @@ def get_user_proctored_exams(username, request):
     return result
 
 
-def get_course_calendar(request, course_key_string):
+def get_course_calendar(user, course_key_string):
     try:
         from icalendar import Calendar, Event
     except ImportError:
@@ -94,7 +94,6 @@ def get_course_calendar(request, course_key_string):
         return
 
     course_key = CourseKey.from_string(course_key_string)
-    user = request.user
     checked = ["course", "vertical", "sequential"]
     items = modulestore().get_items(course_key)
     hour = timedelta(hours=1)
