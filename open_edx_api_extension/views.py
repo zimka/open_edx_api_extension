@@ -798,11 +798,11 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
 
         **Post Parameters**
 
-            * user_id: User unique identifier. Optional. Works only if request.user is staff
+            * username: User unique username. Optional. Works only if request.user is staff
 
         **Response Values**
 
-            200 - iCalendar file, 400 - bad user_id, 403 - non-staff user requests calendar for other user
+            200 - iCalendar file, 400 - bad username, 403 - non-staff user requests calendar for other user
 
     """
     authentication_classes = (SessionAuthenticationAllowInactiveUser,
@@ -810,14 +810,14 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def get(self, request, course_key_string):
-        if not settings.FEATURES["ICALENDAR_DUE_API"]:
+        if not settings.FEATURES.get("ICALENDAR_DUE_API", False):
             return Response(status=status.HTTP_404_NOT_FOUND)
 
-        user_id = request.GET.get("user_id", None)
-        if user_id:
+        username = request.GET.get("username", None)
+        if username:
             try:
                 if request.user.is_staff:
-                    user = User.objects.get(id=int(user_id))
+                    user = User.objects.get(username=username)
                 else:
                     return Response(status=status.HTTP_403_FORBIDDEN,
                                     data={"message": "Must be staff to request other user's calendar"})

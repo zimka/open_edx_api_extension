@@ -59,5 +59,5 @@ http://edx-platform-api.readthedocs.org/en/latest/enrollment/enrollment.html#enr
 
 GET /api/extended/calendar/{course_key_string}/
 
-Returns ICalendar with course due dates for requser.user or given user_id.
+Returns ICalendar with course due dates for requser.user or given username.
 Feature ICALENDAR_DUE_API must be set up in settings.
