@@ -67,6 +67,7 @@ def get_user_proctored_exams(username, request):
                     item_id = UsageKey.from_string(exam['content_id'])
                     item = modulestore().get_item(item_id)
                     exam['visible_to_staff_only'] = item.visible_to_staff_only
+                    exam['exam_review_checkbox'] = item.exam_review_checkbox
                     oldest = None
                     due_dates = []
                     for vertical in item.get_children():
