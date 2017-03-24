@@ -816,16 +816,13 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
         username = request.GET.get("username", None)
         if username:
             try:
-                if request.user.is_staff:
-                    user = User.objects.get(username=username)
-                else:
-                    return Response(status=status.HTTP_403_FORBIDDEN,
-                                    data={"message": "Must be staff to request other user's calendar"})
+                user = User.objects.get(username=username)
             except:
                 return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Wrong user id"})
         else:
             user = request.user
-
+        if not user:
+            return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "User not specified"})
         text = get_course_calendar(user, course_key_string)
         mime = "text/calendar"
         response = HttpResponse(text, content_type=mime, status=200)
