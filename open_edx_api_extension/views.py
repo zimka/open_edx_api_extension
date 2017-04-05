@@ -604,9 +604,18 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
             group_type=CourseUserGroup.COHORT
         )
 
+        default_group = None
+        for group in CourseUserGroup.objects.filter(course_id=course_key):
+            if group.name.lower() == "default" or group.name.lower() == "default group":
+                default_group = group
+        if not default_group:
+            default_group = add_cohort(course_key, "Default Group", 'manual')
+
         # remove user from verified cohort
         if action == u'delete':
-            if not course_cohorts.exists() or course_cohorts[0].name != cohort.name:
+            if not course_cohorts.exists():
+                add_user_to_cohort(default_group, user.username)
+            elif course_cohorts[0].name != cohort.name:
                 return Response(
                     status=status.HTTP_200_OK,
                     data={"message": u"User {username} already was removed from cohort {cohort_name}".format(
@@ -622,6 +631,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                         username=username,
                         cohort_name=cohort.name
                     ))
+                add_user_to_cohort(default_group, user.username)
                 return Response(
                     status=status.HTTP_200_OK,
                     data={"message": u"User {username} removed from cohort {cohort_name}".format(
