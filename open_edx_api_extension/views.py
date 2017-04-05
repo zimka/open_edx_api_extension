@@ -1,6 +1,8 @@
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
+from django.conf import settings
+from django.http import HttpResponse
 from django.db import transaction
 from django.utils.decorators import method_decorator
 
@@ -35,7 +37,7 @@ from openedx.core.lib.api.authentication import (
     SessionAuthenticationAllowInactiveUser,
     OAuth2AuthenticationAllowInactiveUser,
 )
-from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated
+from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated, ApiKeyHeaderPermission
 
 from enrollment import api
 from enrollment.errors import (
@@ -48,11 +50,16 @@ from eventtracking import tracker
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
-from .data import get_course_enrollments, get_user_proctored_exams
+from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
+try:
+    from edx_proctoring.models import ProctoredExamStudentAttempt
+    from edx_proctoring.api import remove_exam_attempt
+except ImportError:
+    ProctoredExamStudentAttempt = None
 
 class LibrariesList(ListAPIView):
     """
@@ -782,3 +789,123 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
                     creds['discussions'][course_id.html_id()][role.name] = [u.username for u in role.users.all()]
         return Response(data=creds)
 
+
+def check_proctored_exams_attempt_turn_on(method):
+    """
+    Checks that option is turned on
+    :param method:
+    :return:
+    """
+    def dummy_api(*args, **kwargs):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if not (ProctoredExamStudentAttempt and settings.FEATURES.get("PROCTORED_EXAMS_ATTEMPT_DELETE", False)):
+        return dummy_api
+    return method
+
+
+class ProctoredExamsAttemptView(APIView):
+    """
+        **Use Cases**
+
+        Allow to delete ExamAttempt for given user
+
+
+        **Example Requests**:
+
+            DELETE /api/extended/user_proctored_exam_attempt/A9597706-BB17-47A8-84BB-16F779FEB771/{
+                "user_id": "1",
+            }
+
+        **Post Parameters**
+
+            * user_id: The unique user id in plp and edx
+
+
+        **Response Values**
+
+            200 - OK, 404 - turned off, 400 - Fail (with error message), 500 - Failed for found user and attempt
+
+
+    """
+    authentication_classes = (SessionAuthenticationAllowInactiveUser,
+                              OAuth2AuthenticationAllowInactiveUser)
+    permission_classes = ApiKeyHeaderPermission,
+
+    @staticmethod
+    def is_allowed_for_session(attempt):
+        course_id = attempt.proctored_exam.course_id
+        course_key = CourseKey.from_string(course_id)
+        try:
+            course = modulestore().get_course(course_key)
+        except Exception as e:
+            logging.error("API get course for id {} error; Traceback:{}".format(course_id, str(e)))
+            return False
+        return getattr(course, "allow_deleting_proctoring_attempts", False)
+
+    @check_proctored_exams_attempt_turn_on
+    def delete(self, request, attempt_code):
+        try:
+            attempt = ProctoredExamStudentAttempt.objects.get_exam_attempt_by_code(attempt_code)
+        except Exception as e:
+            logging.error("Wrong proctored exam attempt code: {}; Exception: {}".format(attempt_code, str(e)))
+            return Response(data={"message": "Wrong attempt_code"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not self.is_allowed_for_session(attempt):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            remove_exam_attempt(attempt_id=attempt.id, requesting_user=attempt.user)
+        except Exception as e:
+            logging.error("Failed to remove proctored exam attempt {}".format(attempt_code))
+            return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(status=200)
+
+
+class CourseCalendar(APIView, ApiKeyPermissionMixIn):
+    """
+        **Use Cases**
+            Allow to get iCalendar file with course deadlines
+
+
+        **Example Requests**:
+
+            GET /api/extended/calendar/{course_key_string}/
+
+        **Post Parameters**
+
+            * username: User unique username. Optional. Works only if request.user is staff
+
+        **Response Values**
+
+            200 - iCalendar file, 400 - bad username, 403 - non-staff user requests calendar for other user
+
+    """
+    authentication_classes = (SessionAuthenticationAllowInactiveUser,
+                              OAuth2AuthenticationAllowInactiveUser)
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request, course_key_string):
+        if not settings.FEATURES.get("ICALENDAR_DUE_API", False):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        username = request.GET.get("username", None)
+        log.info(request.user)
+        if username:
+            try:
+                if request.user.is_staff:
+                    user = User.objects.get(username=username)
+                else:
+                    user = User.objects.get(username=username)
+                    #return Response(status=status.HTTP_403_FORBIDDEN,
+                    #                data={"message": "Must be staff to request other user's calendar"})
+            except:
+                return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Wrong user id"})
+        else:
+            user = request.user
+
+        text = get_course_calendar(user, course_key_string)
+        mime = "text/calendar"
+        response = HttpResponse(text, content_type=mime, status=200)
+        response['Content-Disposition'] = 'attachment; filename="{}_calendar.ics"'.format(course_key_string)
+        return response
