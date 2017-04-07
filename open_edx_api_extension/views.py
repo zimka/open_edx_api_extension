@@ -526,10 +526,12 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     def post(self, request):
+        log.info(request.data)
         username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
         except ObjectDoesNotExist:
+            log.error(u"User {username} does not exist".format(username=username))
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
                 data={"message": u"User {username} does not exist".format(username=username)}
@@ -537,6 +539,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
 
         course_id = request.data.get('course_id')
         if not course_id:
+            log.error(u"Course ID must be specified to create a new enrollment.")
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
                 data={"message": u"Course ID must be specified to create a new enrollment."}
@@ -545,6 +548,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
         try:
             course_key = CourseKey.from_string(course_id)
         except InvalidKeyError:
+            log.error(u"No course '{course_id}' found for enrollment".format(course_id=course_id))
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
                 data={
@@ -553,6 +557,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
             )
         course_is_cohorted = is_course_cohorted(course_key)
         if not course_is_cohorted:
+            log.info(u"Course {course_id} is not cohorted.".format(course_id=course_id))
             return Response(
                 status=status.HTTP_200_OK,
                 data={"message": u"Course {course_id} is not cohorted.".format(course_id=course_id)}
@@ -560,6 +565,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
 
         action = request.data.get('action')
         if action not in [u'add', u'delete']:
+            log.error(u"Available actions are 'add' and 'delete'.")
             return Response(
                 status=status.HTTP_400_BAD_REQUEST,
                 data={"message": u"Available actions are 'add' and 'delete'."}
@@ -568,8 +574,11 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
         cohort_exists = is_cohort_exists(course_key, VERIFIED)
         if not cohort_exists:
             if action == u'add':
+                log.info(u"Cohort VERIFIED doesn't exist for course {} so let's create it!".format(course_id))
                 cohort = add_cohort(course_key, VERIFIED, 'manual')
+                log.info(u"Cohort VEIFIED created for the course {}".format(course_id))
             else:
+                log.info(u"There aren't cohort verified for {course_id}".format(course_id=course_id))
                 return Response(
                     status=status.HTTP_200_OK,
                     data={"message": u"There aren't cohort verified for {course_id}".format(course_id=course_id)}
@@ -582,6 +591,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
         )
         if not enrollment or not enrollment.is_active:
             if action == u'add':
+                log.error(u"Failed to add user into verified cohort. User {username} not enrolled or unenrolled in course {course_id}.".format(username=username, course_id=course_id))
                 return Response(
                     status=status.HTTP_400_BAD_REQUEST,
                     data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
@@ -590,13 +600,24 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                     )}
                 )
             if action == u'delete':
-                return Response(
-                    status=status.HTTP_200_OK,
-                    data={"message": u"User {username} not enrolled or unenrolled in course {course_id}.".format(
-                        username=username,
-                        course_id=course_id
-                    )}
-                )
+                if not enrollment:
+                    log.info(u"User {username} is not enrolled in course {course_id}. (!!!)".format(username=username, course_id=course_id))
+                    return Response(
+                        status=status.HTTP_200_OK,
+                        data={"message": u"User {username} is not enrolled in course {course_id}. (!!!)".format(
+                            username=username,
+                            course_id=course_id
+                        )}
+                    )
+                else:
+                    log.info(u"User {username} was unenrolled from course {course_id}.".format(username=username, course_id=course_id))
+                    return Response(
+                        status=status.HTTP_200_OK,
+                        data={"message": u"User {username} was unenrolled from course {course_id}.".format(
+                            username=username,
+                            course_id=course_id
+                        )}
+                    )
 
         course_cohorts = CourseUserGroup.objects.filter(
             course_id=course_key,
@@ -605,60 +626,65 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
         )
 
         default_group = None
-        for group in CourseUserGroup.objects.filter(course_id=course_key):
+        for group in CourseUserGroup.objects.filter(course_id=course_key, group_type=CourseUserGroup.COHORT):
             if group.name.lower() == "default" or group.name.lower() == "default group":
                 default_group = group
         if not default_group:
-            default_group = add_cohort(course_key, "Default Group", 'manual')
+            log.info(u"Cohort DEFAULT doesn't exist for course {} so let's create it!".format(course_id))
+            default_group = add_cohort(course_key, "Default Group", 'random')
+            log.info(u"Cohort 'Default Group' succesfully created for the course {}".format(course_id))
 
-        # remove user from verified cohort
+        # remove user from verified cohort and add to default
         if action == u'delete':
-            if not course_cohorts.exists():
-                add_user_to_cohort(default_group, user.username)
-            elif course_cohorts[0].name != cohort.name:
-                return Response(
-                    status=status.HTTP_200_OK,
-                    data={"message": u"User {username} already was removed from cohort {cohort_name}".format(
-                        username=username,
-                        cohort_name=cohort.name
-                    )}
-                )
+            # let's check, that user not already presented into other cohort
+            if course_cohorts.exists():
+                if course_cohorts.first().name != cohort.name:
+                    log.info(u"User {username} already present in non-verified cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=course_cohorts.first().name, course_id=course_id))
+                    return Response(
+                        status=status.HTTP_200_OK,
+                        data={"message": u"User {username} already present in non-verified cohort {cohort_name} in course {course_id}".format(
+                            username=username,
+                            cohort_name=course_cohorts.first().name,
+                            course_id=course_id
+                        )}
+                    )
+                else:
+                    log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+                    return Response(
+                        status=status.HTTP_200_OK,
+                        data={"message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
+                            username=username,
+                            cohort_name=default_group.name,
+                            course_id=course_id
+                        )}
+                    )
             else:
                 try:
-                    remove_user_from_cohort(cohort, username)
+                    add_user_to_cohort(default_group, username)
+                    log.info(u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                 except ValueError:
-                    log.warning(u"User {username} already removed from cohort {cohort_name}".format(
-                        username=username,
-                        cohort_name=cohort.name
-                    ))
-                add_user_to_cohort(default_group, user.username)
+                    log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                 return Response(
                     status=status.HTTP_200_OK,
-                    data={"message": u"User {username} removed from cohort {cohort_name}".format(
+                    data={"message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
                         username=username,
-                        cohort_name=cohort.name
+                        cohort_name=default_group.name,
+                        course_id=course_id
                     )}
                 )
 
-        if course_cohorts.exists():
-            if course_cohorts[0] == cohort:
-                return Response(
-                    status=status.HTTP_200_OK,
-                    data={"message": u"User {username} already present in cohort {cohort_name}".format(
-                        username=username,
-                        cohort_name=cohort.name
-                    )}
-                )
 
-        add_user_into_verified_cohort(course_cohorts, cohort, user)
-
-        return Response(
-            status=status.HTTP_200_OK,
-            data={"message": u"User {username} added to cohort {cohort_name}".format(
-                username=user.username,
-                cohort_name=cohort.name
-            )}
-        )
+        if action == u"add":
+            add_user_into_verified_cohort(course_cohorts, cohort, user)
+            log.info (u"User {username} added to cohort {cohort_name} into course {course_id}".format(username=user.username, cohort_name=cohort.name, course_id=course_id))
+            return Response(
+                status=status.HTTP_200_OK,
+                data={"message": u"User {username} added to cohort {cohort_name} into course {course_id}".format(
+                    username=user.username,
+                    cohort_name=cohort.name,
+                    course_id=course_id
+                )}
+            )
 
 
 def add_user_into_verified_cohort(course_cohorts, cohort, user):
