@@ -189,6 +189,11 @@ class CourseListMixin(object):
         else:
             results = modulestore().get_courses()
 
+        proctoring_system = self.request.query_params.get('proctoring_system')
+        if proctoring_system:
+            results = (course for course in results if
+                       course.proctoring_service == proctoring_system)
+
         # Ensure only course descriptors are returned.
         results = (course for course in results if
                    course.scope_ids.block_type == 'course')
