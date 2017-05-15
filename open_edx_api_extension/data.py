@@ -1,5 +1,6 @@
 import logging
 from datetime import timedelta
+from django.utils import timezone
 
 from django.core.urlresolvers import reverse
 from django.conf import settings
@@ -37,6 +38,8 @@ def get_user_proctored_exams(username, request):
     result = {}
     for enrollment in enrollments:
         course = enrollment.course
+        if course.end and course.end < timezone.now():
+            continue
         try:
             course_id = str(course.id)
         except AttributeError:
