@@ -38,7 +38,7 @@ def get_user_proctored_exams(username, request):
     result = {}
     for enrollment in enrollments:
         course = enrollment.course
-        if course.end and course.end < timezone.now():
+        if course and course.end and course.end < timezone.now():
             continue
         try:
             course_id = str(course.id)
