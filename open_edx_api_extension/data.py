@@ -113,7 +113,7 @@ def get_course_calendar(user, course_key_string):
             continue
         if not item.graded:
             continue
-        if not has_access(user, "load", item, course_key=item.location):
+        if not has_access(user, "load", item, course_key=item.location.course_key):
             continue
         if not item.due:
             continue
