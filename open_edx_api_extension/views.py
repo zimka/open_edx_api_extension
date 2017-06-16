@@ -654,7 +654,12 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                         )}
                     )
                 else:
-                    log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+                    log.warning(u"Moving user {username} into default cohort {cohort_name} from verified in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+                    try:
+                        add_user_to_cohort(default_group, username)
+                        log.info(u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+                    except ValueError:
+                        log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                     return Response(
                         status=status.HTTP_200_OK,
                         data={"message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
