@@ -303,7 +303,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
 
         **Example Requests**:
 
-            POST /api/extended/enrollment{
+            POST /api/extended/paid_mass_enrollment{
                 "course_details":{"course_id": "edX/DemoX/Demo_Course"},
                 "users": "[user1, user2, user3]"
             }
@@ -338,7 +338,10 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
     authentication_classes = OAuth2AuthenticationAllowInactiveUser, EnrollmentCrossDomainSessionAuth
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
-    @transaction.atomic
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
     def post(self, request):
         """
         Enrolls the list of users in a verified course mode.
