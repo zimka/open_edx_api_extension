@@ -21,12 +21,6 @@ from courseware import courses
 
 from django_comment_common.models import Role, FORUM_ROLE_STUDENT
 from openedx.core.djangoapps.embargo import api as embargo_api
-
-try:
-    from instructor.offline_gradecalc import student_grades
-except:
-    pass
-
 from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
 from student.models import User, CourseEnrollment, CourseAccessRole
@@ -50,12 +44,9 @@ from enrollment.errors import (
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
 
-from eventtracking import tracker
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
-from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
-
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
@@ -64,6 +55,9 @@ try:
     from edx_proctoring.api import remove_exam_attempt
 except ImportError:
     ProctoredExamStudentAttempt = None
+from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
+from .models import CourseUserResultCache
+from .utils import student_grades
 
 
 class CourseUserResult(CourseViewMixin, RetrieveAPIView):
@@ -113,7 +107,6 @@ class CourseUserResult(CourseViewMixin, RetrieveAPIView):
         username = self.kwargs.get('username')
         enrolled_students = CourseEnrollment.objects.users_enrolled_in(
             self.course_key).filter(username=username)
-        course = courses.get_course(self.course_key)
 
         if not enrolled_students:
             return Response({
@@ -121,15 +114,31 @@ class CourseUserResult(CourseViewMixin, RetrieveAPIView):
                 "error": "invalid_request"
             })
 
+        course = None
+        grade_summaries = []
+        for student in enrolled_students:
+            # use cache if have any
+            saved_info = CourseUserResultCache.get_grade_summary(student, self.course_key)
+            if saved_info is not None:
+                grade_summaries.append(saved_info)
+                continue
+
+            # otherwise get grades elsewhere and save them to cache
+            if course is None:
+                course = courses.get_course(self.course_key)
+            new_info = student_grades(student, course)
+            CourseUserResultCache.save_grade_summary(student, self.course_key, new_info)
+            grade_summaries.append(new_info)
+
         student_info = [
             {
                 'username': student.username,
                 'id': student.id,
                 'email': student.email,
-                'grade_summary': student_grades(student, request, course),
+                'grade_summary': grade_summaries[num],
                 'realname': student.profile.name,
             }
-            for student in enrolled_students
+            for num, student in enumerate(enrolled_students)
             ]
         return Response(student_info)
 
@@ -166,9 +175,10 @@ class CourseListMixin(object):
         results = (course for course in results if
                    course.scope_ids.block_type == 'course')
 
-        # Sort the results in a predictable manner.
-        return sorted(results, key=lambda course: unicode(course.id))
 
+        # Sort the results in a predictable manner.
+        v = sorted(results, key=lambda course: unicode(course.id))
+        return v
 
 class CourseList(CourseListMixin, ListAPIView):
     """
