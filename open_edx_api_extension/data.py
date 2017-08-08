@@ -74,12 +74,15 @@ def get_user_proctored_exams(username, request):
                     item_id = UsageKey.from_string(exam['content_id'])
                     item = modulestore().get_item(item_id)
                     exam['visible_to_staff_only'] = item.visible_to_staff_only
-                    exam_review_checkbox = item.exam_review_checkbox
-                    if 'voice' in exam_review_checkbox:
-                        exam_review_checkbox['voices'] = exam_review_checkbox.pop('voice')
-                    if 'aid' in exam_review_checkbox:
-                        exam_review_checkbox['human_assistant'] = exam_review_checkbox.pop('aid')
-                    exam['exam_review_checkbox'] = exam_review_checkbox
+                    if hasattr(item, "exam_review_checkbox"):
+                        exam_review_checkbox = item.exam_review_checkbox
+                        if 'voice' in exam_review_checkbox:
+                            exam_review_checkbox['voices'] = exam_review_checkbox.pop('voice')
+                        if 'aid' in exam_review_checkbox:
+                            exam_review_checkbox['human_assistant'] = exam_review_checkbox.pop('aid')
+                        exam['exam_review_checkbox'] = exam_review_checkbox
+                    else:
+                        exam['exam_review_checkbox'] = {}
                     oldest = None
                     due_dates = []
                     for vertical in item.get_children():
@@ -113,7 +116,7 @@ def get_course_calendar(user, course_key_string):
             continue
         if not item.graded:
             continue
-        if not has_access(user, "load", item, course_key=item.location):
+        if not has_access(user, "load", item, course_key=item.location.course_key):
             continue
         if not item.due:
             continue
