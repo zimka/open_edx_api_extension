@@ -50,8 +50,6 @@ def plp_check_unenroll(identifiers, username, session_name, banned_by):
         'results': results,
         'auto_enroll': False,
     }
-    logging.error("{}".format(plp_response))
-    logging.error("{}".format(results))
 
     if plp_response.status_code == 200:
         return 1, None
