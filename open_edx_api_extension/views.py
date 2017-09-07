@@ -13,16 +13,14 @@ from rest_framework import status
 
 from bulk_email.models import Optout
 
-from cors_csrf.decorators import ensure_csrf_cookie_cross_domain
+from openedx.core.djangoapps.cors_csrf.decorators import ensure_csrf_cookie_cross_domain
 from course_modes.models import CourseMode
 from course_structure_api.v0 import serializers
 from course_structure_api.v0.views import CourseViewMixin
 from courseware import courses
 
 from django_comment_common.models import Role, FORUM_ROLE_STUDENT
-from embargo import api as embargo_api
-from instructor.offline_gradecalc import student_grades
-
+from openedx.core.djangoapps.embargo import api as embargo_api
 from opaque_keys.edx.keys import CourseKey
 from opaque_keys import InvalidKeyError
 from student.models import User, CourseEnrollment, CourseAccessRole
@@ -46,12 +44,9 @@ from enrollment.errors import (
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
 
-from eventtracking import tracker
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
-from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
-
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
@@ -60,42 +55,9 @@ try:
     from edx_proctoring.api import remove_exam_attempt
 except ImportError:
     ProctoredExamStudentAttempt = None
-
-class LibrariesList(ListAPIView):
-    """
-    **Use Case**
-        Get a paginated list of libraries in the whole edX Platform.
-        The list can be filtered by course_id.
-        Each page in the list can contain up to 10 courses.
-    **Example Requests**
-          GET /api/extended/libraries/
-    **Response Values**
-        * count: The number of courses in the edX platform.
-        * next: The URI to the next page of courses.
-        * previous: The URI to the previous page of courses.
-        * num_pages: The number of pages listing courses.
-        * results:  A list of courses returned. Each collection in the list
-          contains these fields.
-            * id: The unique identifier for the course.
-              "course".
-            * org: The organization specified for the course.
-            * course: The course number.
-    """
-    # Using EDX_API_KEY for access to this api
-    authentication_classes = (SessionAuthenticationAllowInactiveUser,
-                              OAuth2AuthenticationAllowInactiveUser)
-    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
-
-    def list(self, request, *args, **kwargs):
-        lib_info = [
-            {
-                "display_name": lib.display_name,
-                "library_key": unicode(lib.location.library_key),
-                "org": unicode(lib.location.library_key.org),
-            }
-            for lib in modulestore().get_libraries()
-            ]
-        return Response(lib_info)
+from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
+from .models import CourseUserResultCache
+from .utils import student_grades
 
 
 class CourseUserResult(CourseViewMixin, RetrieveAPIView):
@@ -145,7 +107,6 @@ class CourseUserResult(CourseViewMixin, RetrieveAPIView):
         username = self.kwargs.get('username')
         enrolled_students = CourseEnrollment.objects.users_enrolled_in(
             self.course_key).filter(username=username)
-        course = courses.get_course(self.course_key)
 
         if not enrolled_students:
             return Response({
@@ -153,15 +114,31 @@ class CourseUserResult(CourseViewMixin, RetrieveAPIView):
                 "error": "invalid_request"
             })
 
+        course = None
+        grade_summaries = []
+        for student in enrolled_students:
+            # use cache if have any
+            saved_info = CourseUserResultCache.get_grade_summary(student, self.course_key)
+            if saved_info is not None:
+                grade_summaries.append(saved_info)
+                continue
+
+            # otherwise get grades elsewhere and save them to cache
+            if course is None:
+                course = courses.get_course(self.course_key)
+            new_info = student_grades(student, course)
+            CourseUserResultCache.save_grade_summary(student, self.course_key, new_info)
+            grade_summaries.append(new_info)
+
         student_info = [
             {
                 'username': student.username,
                 'id': student.id,
                 'email': student.email,
-                'grade_summary': student_grades(student, request, course),
+                'grade_summary': grade_summaries[num],
                 'realname': student.profile.name,
             }
-            for student in enrolled_students
+            for num, student in enumerate(enrolled_students)
             ]
         return Response(student_info)
 
@@ -198,9 +175,10 @@ class CourseListMixin(object):
         results = (course for course in results if
                    course.scope_ids.block_type == 'course')
 
-        # Sort the results in a predictable manner.
-        return sorted(results, key=lambda course: unicode(course.id))
 
+        # Sort the results in a predictable manner.
+        v = sorted(results, key=lambda course: unicode(course.id))
+        return v
 
 class CourseList(CourseListMixin, ListAPIView):
     """
@@ -299,7 +277,7 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
 
         **Example Requests**:
 
-            POST /api/extended/enrollment{
+            POST /api/extended/paid_mass_enrollment{
                 "course_details":{"course_id": "edX/DemoX/Demo_Course"},
                 "users": "[user1, user2, user3]"
             }
@@ -334,7 +312,10 @@ class PaidMassEnrollment(APIView, ApiKeyPermissionMixIn):
     authentication_classes = OAuth2AuthenticationAllowInactiveUser, EnrollmentCrossDomainSessionAuth
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
-    @transaction.atomic
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
     def post(self, request):
         """
         Enrolls the list of users in a verified course mode.
@@ -530,8 +511,11 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
     authentication_classes = OAuth2AuthenticationAllowInactiveUser, EnrollmentCrossDomainSessionAuth
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
     def post(self, request):
-        log.info(request.data)
         username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
@@ -560,6 +544,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                     "message": u"No course '{course_id}' found for enrollment".format(course_id=course_id)
                 }
             )
+
         course_is_cohorted = is_course_cohorted(course_key)
         if not course_is_cohorted:
             log.info(u"Course {course_id} is not cohorted.".format(course_id=course_id))
@@ -643,65 +628,84 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
         if action == u'delete':
             # let's check, that user not already presented into other cohort
             if course_cohorts.exists():
-                if course_cohorts.first().name != cohort.name:
-                    log.info(u"User {username} already present in non-verified cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=course_cohorts.first().name, course_id=course_id))
+                if course_cohorts.first().name == default_group.name:
+                    log.warning(
+                        u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(
+                            username=username, cohort_name=default_group.name, course_id=course_id))
                     return Response(
                         status=status.HTTP_200_OK,
-                        data={"message": u"User {username} already present in non-verified cohort {cohort_name} in course {course_id}".format(
-                            username=username,
-                            cohort_name=course_cohorts.first().name,
-                            course_id=course_id
-                        )}
+                        data={
+                            "message": u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(
+                                username=username,
+                                cohort_name=default_group.name,
+                                course_id=course_id
+                            )}
+                    )
+                elif course_cohorts.first().name == VERIFIED:
+                    try:
+                        add_user_to_cohort(default_group, username)
+                        log.info(
+                            u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(
+                                username=username, cohort_name=default_group.name, course_id=course_id))
+                    except ValueError:
+                        log.warning(
+                            u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(
+                                username=username, cohort_name=default_group.name, course_id=course_id))
+                    return Response(
+                        status=status.HTTP_200_OK,
+                        data={
+                            "message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
+                                username=username,
+                                cohort_name=default_group.name,
+                                course_id=course_id
+                            )}
                     )
                 else:
-                    log.warning(u"Moving user {username} into default cohort {cohort_name} from verified in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+                    log.info(u"Moving user {username} into default cohort {cohort_name} from verified in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                     try:
                         add_user_to_cohort(default_group, username)
                         log.info(u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                     except ValueError:
                         log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+
                     return Response(
                         status=status.HTTP_200_OK,
-                        data={"message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
+                        data={"message": u"User {username} already present in non-verified cohort {cohort_name} in course {course_id}".format(
+                                username=username, cohort_name=course_cohorts.first().name, course_id=course_id
+                        )}
+                    )
+            else:
+                add_user_to_cohort(default_group, username)
+                log.info(
+                    u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(
+                        username=username, cohort_name=default_group.name, course_id=course_id))
+                return Response(
+                    status=status.HTTP_200_OK,
+                    data={
+                        "message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
                             username=username,
                             cohort_name=default_group.name,
                             course_id=course_id
                         )}
-                    )
-            else:
-                try:
-                    add_user_to_cohort(default_group, username)
-                    log.info(u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
-                except ValueError:
-                    log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
-                return Response(
-                    status=status.HTTP_200_OK,
-                    data={"message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
-                        username=username,
-                        cohort_name=default_group.name,
-                        course_id=course_id
-                    )}
                 )
 
-
         if action == u"add":
-            add_user_into_verified_cohort(course_cohorts, cohort, user)
-            log.info (u"User {username} added to cohort {cohort_name} into course {course_id}".format(username=user.username, cohort_name=cohort.name, course_id=course_id))
+            message = add_user_into_verified_cohort(course_cohorts, cohort, user)
+            if not message:
+                message = u"User {username} added to cohort {cohort_name} into course {course_id}".format(username=user.username, cohort_name=cohort.name, course_id=course_id)
+            log.info(message)
             return Response(
                 status=status.HTTP_200_OK,
-                data={"message": u"User {username} added to cohort {cohort_name} into course {course_id}".format(
-                    username=user.username,
-                    cohort_name=cohort.name,
-                    course_id=course_id
-                )}
+                data={"message":message}
             )
 
 
 def add_user_into_verified_cohort(course_cohorts, cohort, user):
     try:
         add_user_to_cohort(cohort, user.username)
-    except ValueError:
+    except ValueError as e:
         log.warning("User {} already present in the cohort {}".format(user.username, cohort.name))
+        return str(e)
 
 
 class Subscriptions(APIView, ApiKeyPermissionMixIn):
@@ -727,7 +731,7 @@ class Subscriptions(APIView, ApiKeyPermissionMixIn):
 
             * username: The unique user id in plp and edx
 
-            * do_subscribe: True or False
+            * subscribe: True or False
 
         **Response Values**
 

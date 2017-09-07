@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-from django.conf import settings
-from django.http.response import JsonResponse
 import logging
 import requests
+
+from django.conf import settings
+from django.http.response import JsonResponse
+from lms.djangoapps.grades.new.course_grade_factory import CourseGradeFactory
 
 
 def plp_check_unenroll(identifiers, username, session_name, banned_by):
@@ -61,3 +63,9 @@ def plp_check_unenroll(identifiers, username, session_name, banned_by):
         except KeyError as e:
             logging.error("PLP api error: {}".format(str(e)))
         return 0, JsonResponse(response_payload)
+
+
+def student_grades(student, course):
+    """Returns student's grade_summary for course"""
+    cg = CourseGradeFactory().create(student, course)
+    return cg.summary
