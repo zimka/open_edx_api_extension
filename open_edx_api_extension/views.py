@@ -169,7 +169,7 @@ class CourseListMixin(object):
         proctoring_system = self.request.query_params.get('proctoring_system')
         if proctoring_system:
             results = (course for course in results if
-                       course.proctoring_service == proctoring_system)
+                       proctoring_system in course.available_proctoring_services.split(','))
 
         # Ensure only course descriptors are returned.
         results = (course for course in results if

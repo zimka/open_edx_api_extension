@@ -35,6 +35,8 @@ def get_user_proctored_exams(username, request):
     enrollments = CourseEnrollment.objects.filter(is_active=True,
                                                   user__username=username)
     system = request.data.get('system')
+    if not system:
+        system = request.GET.get('system')
     result = {}
     for enrollment in enrollments:
         course = enrollment.course
@@ -53,8 +55,8 @@ def get_user_proctored_exams(username, request):
         )
 
         if course_id not in result and cohorts.exists():
-            proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).available_proctoring_services.split(",")[0]
-            if system and system != proctoring_service:
+            proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).available_proctoring_services.split(",")
+            if system and system not in proctoring_service:
                 continue
             result[course_id] = {
                 "id": course_id,
@@ -65,7 +67,7 @@ def get_user_proctored_exams(username, request):
                 "image_url": course.course_image_url,
                 "start": course.start,
                 "end": course.end,
-                "system": proctoring_service,
+                "system": system,
                 'exams': []
             }
             exams = get_all_exams_for_course(course_id=course.id)
@@ -73,6 +75,12 @@ def get_user_proctored_exams(username, request):
                 if exam['is_proctored']:
                     item_id = UsageKey.from_string(exam['content_id'])
                     item = modulestore().get_item(item_id)
+                    if len(proctoring_service) > 1 and not item.exam_proctoring_system:
+                        logging.warning("For course {} and exam {} proctoring service not specified. Available are {}".format(course_id, exam, proctoring_service))
+                        continue
+                    if len(proctoring_service) > 1 and item.exam_proctoring_system and item.exam_proctoring_system != system:
+                        logging.warning("For course {} and exam {} proctoring service is {}, but system is {}".format(course_id, exam, item.exam_proctoring_system, system))
+                        continue
                     exam['visible_to_staff_only'] = item.visible_to_staff_only
                     if hasattr(item, "exam_review_checkbox"):
                         exam_review_checkbox = item.exam_review_checkbox
