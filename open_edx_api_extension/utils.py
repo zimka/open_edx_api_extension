@@ -58,7 +58,7 @@ def plp_check_unenroll(identifiers, username, session_name, banned_by):
         data = plp_response.json()
         try:
             reason = data.get('reason', "No reason")
-            mes = _(u" (forbidden by PLP: {})").format(reason)
+            mes = _(u" (forbidden by PLP: {})").format(_(reason))
             results[0]["identifier"] += mes #hack
             logging.info("User {} uneroll rejected; reason: {}".format(username, reason))
         except KeyError as e:
