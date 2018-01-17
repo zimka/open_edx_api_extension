@@ -1,8 +1,11 @@
+import json
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.http import JsonResponse
 
 from rest_framework.generics import RetrieveAPIView, ListAPIView
 from rest_framework.response import Response
@@ -43,12 +46,18 @@ from enrollment.errors import (
     CourseModeNotFoundError, CourseEnrollmentExistsError
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
+from instructor.views.api import require_level
+from instructor_task.api_helper import AlreadyRunningError
+from instructor_task.models import ReportStore
+
 
 from eventtracking import tracker
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
 from .data import get_course_enrollments, get_user_proctored_exams
+from .tasks import submit_calculate_grades_csv_users
+from .utils import get_custom_grade_config
 
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
@@ -782,3 +791,139 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
                     creds['discussions'][course_id.html_id()][role.name] = [u.username for u in role.users.all()]
         return Response(data=creds)
 
+
+@transaction.non_atomic_requests
+@ensure_csrf_cookie
+@require_level('staff')
+def view_grades_csv_for_users(request, course_id):
+    """
+    Example: GET http://edx.local.se:8000/api/extended/calculate_grades_csv/course-v1:test_o+test_n+test_r?usernames=["test","test1"]
+    """
+    course_key = CourseKey.from_string(course_id)
+    try:
+        usernames_str = request.GET.get("usernames")
+        usernames = json.loads(usernames_str)
+    except AttributeError as e:
+        logging.error("API extensions, user grades error: {}".format(str(e)))
+        return JsonResponse({"status": "An error occured: failed to get usernames from request"})
+    try:
+        submit_calculate_grades_csv_users(request, course_key, usernames)
+        success_status = ("The grade report is being created."
+                           " To view the status of the report, see Pending Tasks below.")
+        return JsonResponse({"status": success_status})
+    except AlreadyRunningError:
+        already_running_status = ("The grade report is currently being created."
+                                   " To view the status of the report, see Pending Tasks below."
+                                   " You will be able to download the report when it is complete.")
+        return JsonResponse({"status": already_running_status})
+
+
+class UsersGradeReports(APIView):#, ApiKeyPermissionMixIn):
+    """
+        **Use Cases**
+
+            Used to get reports urls for given course_id and given usenames
+
+        **Example Requests**:
+
+            GET /api/extended/users_grade_reports{
+                "course_ids": ["course-v1:edX+DemoX+Demo_Course", ...]
+                "usernames": ["test"]
+            }
+
+        **Response Values**
+
+            {
+                "course_id_1": {"reports":{
+                    "username_1_1":[url_report1.csv, ..., url_reportn.csv],
+                    "broken_username":"Error: user not found",
+                     ...
+                    "username_1_n": {...}
+                    }
+                }
+                "broken_course_id":{"error":"No course for this course_id"}
+                ...
+                "course_id_m": {"reports":{...}}
+            }
+            OR
+            {"error": "<Some fatal error>"}
+
+    """
+
+    #authentication_classes = OAuth2AuthenticationAllowInactiveUser,
+    #permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request):
+        #collect data
+        data_get = dict(request.GET.iterlists())
+        def unjson(s):
+            try:
+                return json.loads(s)
+            except:
+                return s
+
+        try:
+            usernames = (data_get.get("usernames"))
+            usernames = unjson(usernames)
+            if isinstance(usernames,unicode):
+                usernames = [usernames]
+        except Exception as e:
+            logging.error("API got incorrect usernames: {}".format(str(e)))
+            return Response(data={"error": "Given usenames are incorrect"})
+
+        try:
+            course_ids = (data_get.get("course_ids"))
+            course_ids = unjson(course_ids)
+            if isinstance(course_ids, unicode):
+                course_ids = [course_ids]
+        except Exception as e:
+            logging.error("API got incorrect course_ids: {}".format(str(e)))
+            return Response(data={"error": "Given usenames incorrect; Exception:{}".format(str(e))})
+
+        #check existance of users from usernames
+        users = User.objects.filter(username__in=usernames)
+        users_dict = dict((u.username, u.id) for u in users)
+        if not users_dict:
+            return Response(data={"error": "No user for any of given usernames"})
+        id_user_map = dict((users_dict[x], x) for x in users_dict)
+        users_not_found = [uname for uname in usernames if uname not in users_dict]
+        if users_not_found:
+            msg = "Requested users not found: {}".format(",".join(users_not_found))
+            logging.error(msg)
+        users_dict.update({(uname, None) for uname in users_not_found})
+
+        #check existance of courses from course_ids
+        course_ids_dict = {}
+        for cid in course_ids:
+            try:
+                ckey = CourseKey.from_string(cid)
+                course_ids_dict[cid] = ckey
+            except:
+                logging.error("No course for course_id given to API: {}".format(cid))
+                course_ids_dict[cid] = None
+                continue
+        if not [cid for cid in course_ids if course_ids_dict[cid]]:
+            return Response(data={"error": "No course for any of given course_ids"})
+
+        answer_data = dict((cid, {}) for cid in course_ids_dict)
+        report_store = ReportStore.from_config(config_name=get_custom_grade_config())
+        for cid in course_ids_dict:
+            if not course_ids_dict[cid]:
+                answer_data[cid] = {"error":"No course for this course_id"}
+                continue
+            file_urls = report_store.links_for(course_ids_dict[cid])
+            current_reports = {}
+            for uname in users_dict:
+                if users_dict[uname]:
+                    current_reports[uname] = []
+                else:
+                    current_reports[uname] = "Error: user not found"
+
+            for name, url in file_urls:
+                name_parts = name.split("_")
+                url_id = int(name_parts[name_parts.index('id') + 1])
+                url_uname = id_user_map.get(url_id, None) # None means this user wasn't requested
+                if url_uname:
+                    current_reports[url_uname].append(url)
+            answer_data[cid] = {"reports":current_reports}
+        return Response(data=answer_data)

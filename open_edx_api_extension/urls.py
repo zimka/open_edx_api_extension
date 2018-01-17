@@ -16,4 +16,7 @@ urlpatterns = [
     url(r'^update_verified_cohort$', views.UpdateVerifiedCohort.as_view()),
     url(r'^subscriptions$', views.Subscriptions.as_view()),
     url(r'^credentials$', views.Credentials.as_view()),
+    url(r'^calculate_grades_csv/{}/$'.format(settings.COURSE_ID_PATTERN),
+        views.view_grades_csv_for_users),
+    url(r'^users_grade_reports/$', views.UsersGradeReports.as_view()),
 ]
