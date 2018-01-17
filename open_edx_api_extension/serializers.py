@@ -43,10 +43,15 @@ class CourseWithExamsSerializer(CourseSerializer):
         """
         Object instance -> Dict of primitive datatypes.
         """
+        specific_proctoring_system = False
+        available_proctoring_service = instance.available_proctoring_services.split(',')
+        proctoring_system = self.context['request'].GET.get('proctoring_system')
+        if len(available_proctoring_service) > 1 and proctoring_system:
+            specific_proctoring_system = proctoring_system
         ret = OrderedDict()
         fields = [field for field in self.fields.values() if
                   not field.write_only]
-        exams = get_all_exams_for_course(course_id=instance.id)
+        exams = get_all_exams_for_course(course_id=instance.id, dt_expired=True, proctoring_service=specific_proctoring_system)
         for field in fields:
             try:
                 attribute = field.get_attribute(instance)

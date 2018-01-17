@@ -181,7 +181,7 @@ class CourseListMixin(object):
         proctoring_system = self.request.query_params.get('proctoring_system')
         if proctoring_system:
             results = (course for course in results if
-                       course.proctoring_service == proctoring_system)
+                       proctoring_system in course.available_proctoring_services.split(','))
 
         # Ensure only course descriptors are returned.
         results = (course for course in results if
@@ -528,7 +528,6 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
         return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
 
     def post(self, request):
-        log.info(request.data)
         username = request.data.get('username')
         try:
             user = User.objects.get(username=username)
@@ -557,6 +556,7 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                     "message": u"No course '{course_id}' found for enrollment".format(course_id=course_id)
                 }
             )
+
         course_is_cohorted = is_course_cohorted(course_key)
         if not course_is_cohorted:
             log.info(u"Course {course_id} is not cohorted.".format(course_id=course_id))
@@ -673,18 +673,33 @@ class UpdateVerifiedCohort(APIView, ApiKeyPermissionMixIn):
                             )}
                     )
                 else:
-                    log.warning(u"Moving user {username} into default cohort {cohort_name} from verified in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+                    log.info(u"Moving user {username} into default cohort {cohort_name} from verified in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                     try:
                         add_user_to_cohort(default_group, username)
                         log.info(u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
                     except ValueError:
                         log.warning(u"User {username} already present into default cohort {cohort_name} in course {course_id}".format(username=username, cohort_name=default_group.name, course_id=course_id))
+
                     return Response(
                         status=status.HTTP_200_OK,
                         data={"message": u"User {username} already present in non-verified cohort {cohort_name} in course {course_id}".format(
                                 username=username, cohort_name=course_cohorts.first().name, course_id=course_id
                         )}
                     )
+            else:
+                add_user_to_cohort(default_group, username)
+                log.info(
+                    u"User {username} succesfully moved into default cohort {cohort_name} in course {course_id}".format(
+                        username=username, cohort_name=default_group.name, course_id=course_id))
+                return Response(
+                    status=status.HTTP_200_OK,
+                    data={
+                        "message": u"User {username} moved into default cohort {cohort_name} in course {course_id}".format(
+                            username=username,
+                            cohort_name=default_group.name,
+                            course_id=course_id
+                        )}
+                )
 
         if action == u"add":
             message = add_user_into_verified_cohort(course_cohorts, cohort, user)
