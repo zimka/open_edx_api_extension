@@ -262,7 +262,8 @@ def upload_user_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_i
     upload_csv_to_report_store(rows, report_name, course_id, start_date, config_name=custom_grades_download)
 
     # If there are any error rows (don't count the header), write them out as well
-    if len(err_rows) > 1:
+    has_errors = len(err_rows) > 1
+    if has_errors:
         upload_csv_to_report_store(err_rows, err_report_name, course_id, start_date, config_name=custom_grades_download)
 
     callback_url = _task_input.get("callback_url", None)
@@ -271,9 +272,11 @@ def upload_user_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_i
         report_store = ReportStore.from_config(config_name=custom_grades_download)
         files_urls_pairs = report_store.links_for(course_id)
         TASK_LOG.info((callback_url))
+        find_by_name = lambda name: [url for filename, url in files_urls_pairs if name in filename][0]
         try:
-            csv_url = [url for filename, url in files_urls_pairs if report_name in filename][0]
-            PlpApiClient().push_grade_api_result(callback_url, csv_url)
+            csv_url = find_by_name(report_name)
+            csv_err_url = find_by_name(err_report_name) if has_errors else None
+            PlpApiClient().push_grade_api_result(callback_url, csv_url, csv_err_url)
         except Exception as e:
             TASK_LOG.error("Failed push to PLP:{}".format(str(e)))
 

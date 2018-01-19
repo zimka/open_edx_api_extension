@@ -24,7 +24,7 @@ class PlpApiClient(object):
         if self.base_url is None or self.api_key is None:
             self._request = self._dummy
 
-    def push_grade_api_result(self, path, local_url):
+    def push_grade_api_result(self, path, local_csv_url, local_csv_err_url):
         """
         Returns url with requests CSV grade sheet
         """
@@ -32,8 +32,11 @@ class PlpApiClient(object):
         if not lms_url:
             log.error("Undefined LMS_ROOT_URL. Can't return to PLP CSV file absolute url")
             return
-        csv_url = lms_url.strip("/") + local_url
-        return self._request(path, {"url": csv_url})
+        csv_url = lms_url.strip("/") + local_csv_url
+        data = {"url": csv_url}
+        if local_csv_err_url:
+            data["url_err"] = local_csv_err_url
+        return self._request(path, data)
 
     def _request(self, path, data):
         headers = {'x-plp-api-key': self.api_key}#, 'Content-Type': 'application/json'}
