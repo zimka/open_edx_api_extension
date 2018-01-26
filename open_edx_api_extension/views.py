@@ -46,16 +46,15 @@ from enrollment.errors import (
     CourseModeNotFoundError, CourseEnrollmentExistsError
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
-from instructor.views.api import require_level
-from instructor_task.api_helper import AlreadyRunningError
-from instructor_task.models import ReportStore
+from lms.djangoapps.instructor.views.api import require_level
+from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
+from lms.djangoapps.instructor_task.models import ReportStore
 
 
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
 
-from .data import get_course_enrollments, get_user_proctored_exams
 from .tasks import submit_calculate_grades_csv_users
 from .utils import get_custom_grade_config
 
@@ -852,6 +851,7 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
         return Response(data=creds)
 
 
+# TODO: this one is currently deprecated, should be removed later
 @transaction.non_atomic_requests
 @ensure_csrf_cookie
 @require_level('staff')
@@ -878,7 +878,8 @@ def view_grades_csv_for_users(request, course_id):
         return JsonResponse({"status": already_running_status})
 
 
-class UsersGradeReports(APIView):#, ApiKeyPermissionMixIn):
+# TODO: this one is currently deprecated, should be removed later
+class UsersGradeReports(APIView, ApiKeyPermissionMixIn):
     """
         **Use Cases**
 
@@ -987,6 +988,66 @@ class UsersGradeReports(APIView):#, ApiKeyPermissionMixIn):
                     current_reports[url_uname].append(url)
             answer_data[cid] = {"reports":current_reports}
         return Response(data=answer_data)
+
+
+class CalculateUsersGradeReport(APIView):
+    """
+        **Use Cases**
+
+            Allows to request grading list calculation for course it against
+            listed users. When task finished, it notifies client on given
+            callback url about the result.
+            Requires apllication/json content-type
+
+
+        **Example Requests**:
+
+            POST /api/extended/calculate_grade_reports{
+                "course_id": "course-v1:edX+DemoX+Demo_Course"
+                "users": ["test", "test2"],
+                "staff_username": "instructor_username",
+                "callback_url": "plp.npoed.ru/grade_handle/"
+            }
+
+        **Response Values**
+
+            200: if task is taken in processing
+
+            400: {"error": "<Error description>"}if error occurred
+
+    """
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    @classmethod
+    def as_view(cls, **initkwargs):
+        """Run as_view() non_atomic"""
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
+    def post(self, request):
+        staff_username = request.data.get('staff_username')
+        try:
+            request.user = User.objects.get(username=staff_username)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "Bad staff username:'{}'".format(staff_username)}, status=status.HTTP_400_BAD_REQUEST)
+        usernames = request.data.get('users', [])
+        if not usernames:
+            return JsonResponse({"error": "No users in request"}, status=status.HTTP_400_BAD_REQUEST)
+        callback_url = request.data.get('callback_url', None)
+        if not callback_url:
+            return JsonResponse({"error": "No callback_url in request"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # TODO: better make it part of url scheme
+        course_id = request.data.get('course_id')
+        if not course_id:
+            return JsonResponse({"error": "No course_id in request"}, status=status.HTTP_400_BAD_REQUEST)
+
+        course_key = CourseKey.from_string(course_id)
+        try:
+            submit_calculate_grades_csv_users(request, course_key, usernames, callback_url)
+            return JsonResponse({"status": "Started"})
+        except AlreadyRunningError:
+            return JsonResponse({"status": "AlreadyRunning"})
 
 
 def check_proctored_exams_attempt_turn_on(method):

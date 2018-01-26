@@ -9,6 +9,7 @@ from django.utils.translation import ugettext as _
 from lms.djangoapps.grades.new.course_grade_factory import CourseGradeFactory
 
 
+# TODO: Update using PlpApiClient
 def plp_check_unenroll(identifiers, username, session_name, banned_by):
     """
     Запрос через PLP разрешения на отчисление И бан студента
