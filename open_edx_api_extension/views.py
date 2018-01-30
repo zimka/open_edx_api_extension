@@ -31,6 +31,7 @@ from xmodule.modulestore.django import modulestore
 
 from openedx.core.djangoapps.course_groups.cohorts import (
     is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
+    get_cohort_names
 )
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
@@ -1169,3 +1170,51 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
         response = HttpResponse(text, content_type=mime, status=200)
         response['Content-Disposition'] = 'attachment; filename="{}_calendar.ics"'.format(course_key_string)
         return response
+
+
+class CourseCohortNames(APIView):
+    """
+        **Use Cases**
+            Allows to names of course cohorts if they are enabled
+
+        **Example Requests**:
+            GET /api/extended/cohorts/cohort_names
+
+        **Post Parameters**
+            * course_id: The unique identifier for the course.
+
+        **Response Values**
+
+            400 - bad course_id or absent,
+            400 - {"error": "course with id {} not found"},
+                if course_key is valid but no course with such key
+            400 - {"error": "cohorts disabled for course with id {}"}
+                the message is descriptive
+            200 - {"cohorts": ["cohort_name1", "cohort_name2",...]
+
+    """
+
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request):
+        course_id = request.query_params.get('course_id')
+        try:
+            course_key = CourseKey.from_string(course_id)
+        except (InvalidKeyError, AttributeError) as e:
+            course_id = None
+
+        if not course_id:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        course = modulestore().get_course(course_key)
+        if not course:
+            message = "course with id {} not found".format(course_id)
+            return Response(data={"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not is_course_cohorted(course_key):
+            message = "cohorts disabled for course with id {}".format(course_id)
+            return Response(data={"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        cohorts_names = get_cohort_names(course)
+        return Response(data={"cohorts": cohorts_names.values()})

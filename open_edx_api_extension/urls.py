@@ -22,4 +22,5 @@ urlpatterns = [
     url(r'^users_grade_reports/$', views.CalculateUsersGradeReport.as_view()),
     url(r'^user_proctored_exam_attempt/(?P<attempt_code>[^/]*)/$', views.ProctoredExamsAttemptView.as_view()),
     url(r'^calendar/{}'.format(settings.COURSE_KEY_PATTERN), views.CourseCalendar.as_view(), name="course-calendar"),
+    url(r'^cohorts/cohort_names', views.CourseCohortNames.as_view())
 ]
