@@ -31,7 +31,7 @@ from xmodule.modulestore.django import modulestore
 
 from openedx.core.djangoapps.course_groups.cohorts import (
     is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
-    get_cohort_names
+    get_cohort_names, get_course_cohorts, CourseCohort, set_course_cohort_settings
 )
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
@@ -1172,25 +1172,45 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
         return response
 
 
-class CourseCohortNames(APIView):
+class CohortValidationMixin(object):
+    @staticmethod
+    def is_bad_course_id(course_id, check_cohorts_enabled=True):
+        try:
+            course_key = CourseKey.from_string(course_id)
+        except (InvalidKeyError, AttributeError) as e:
+            return True
+
+        if not modulestore().has_course(course_key):
+            return "course with id {} not found".format(course_id)
+
+        if not check_cohorts_enabled:
+            return
+
+        if not is_course_cohorted(course_key):
+            return "cohorts disabled for course with id {}".format(course_id)
+
+
+class CourseCohortNames(CohortValidationMixin, APIView):
     """
         **Use Cases**
-            Allows to names of course cohorts if they are enabled
+
+            Allows to get names of course cohorts if they are enabled for course
 
         **Example Requests**:
+
             GET /api/extended/cohorts/cohort_names
 
-        **Post Parameters**
+        **Get Parameters**
+
             * course_id: The unique identifier for the course.
 
         **Response Values**
 
             400 - bad course_id or absent,
-            400 - {"error": "course with id {} not found"},
-                if course_key is valid but no course with such key
-            400 - {"error": "cohorts disabled for course with id {}"}
-                the message is descriptive
-            200 - {"cohorts": ["cohort_name1", "cohort_name2",...]
+
+            400 - {"error": "<message>"}
+
+            200 - {"cohorts": ["cohort_name1", "cohort_name2", ...]
 
     """
 
@@ -1199,22 +1219,129 @@ class CourseCohortNames(APIView):
 
     def get(self, request):
         course_id = request.query_params.get('course_id')
-        try:
-            course_key = CourseKey.from_string(course_id)
-        except (InvalidKeyError, AttributeError) as e:
-            course_id = None
+        message = self.is_bad_course_id(course_id)
+        if message:
+            data = {"error": message} if isinstance(message, basestring) else {}
+            return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
 
-        if not course_id:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
-
-        course = modulestore().get_course(course_key)
-        if not course:
-            message = "course with id {} not found".format(course_id)
-            return Response(data={"error": message}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not is_course_cohorted(course_key):
-            message = "cohorts disabled for course with id {}".format(course_id)
-            return Response(data={"error": message}, status=status.HTTP_400_BAD_REQUEST)
-
+        course = modulestore().get_course(CourseKey.from_string(course_id))
         cohorts_names = get_cohort_names(course)
         return Response(data={"cohorts": cohorts_names.values()})
+
+
+class CourseCohortsWithStudents(CohortValidationMixin, APIView):
+    """
+        **Use Cases**
+
+            Allows to get cohorts with listed users or set
+            Post requires apllication/json content-type
+
+        **Example Requests**:
+
+            GET /api/extended/cohorts/cohorts_with_students
+
+            POST /api/extended/cohorts/cohorts_with_students/
+
+        **Get Parameters**
+
+            * course_id: The unique identifier for the course.
+
+        **Get Response Values**
+
+            400 - bad course_id or absent,
+
+            400 - {"error": "<message>"}
+
+            200 - {"cohorts": ["cohort_name1", "cohort_name2",...]
+
+        **Post Parameters**
+
+            Application/json content-type
+
+            * course_id: The unique identifier for the course.
+
+            * mode: honor/verified
+
+            * cohorts: {"cohort_name1": ["user1",...], "cohort_name2": ...}
+
+        **Post Response Values**
+
+            400 - bad course_id or absent,
+
+            400 - {"error": "<message>"}
+
+            400 - {"failed":[
+                            {"user":"username1", "cohort":"cohort_name2", "error":"<reason>"}, ...
+                  ]}
+
+            200 - Ok
+    """
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    ALLOWED_MODES = ('honor', 'verified')
+
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
+    def get(self, request):
+        course_id = request.query_params.get('course_id')
+        message = self.is_bad_course_id(course_id)
+        if message:
+            data = {"error": message} if isinstance(message, basestring) else {}
+            return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
+
+        course = modulestore().get_course(CourseKey.from_string(course_id))
+        cohorts = get_course_cohorts(course)
+        data = {}
+        for group in cohorts:
+            name = group.name
+            users = [u.username for u in group.users.all()]
+            data[name] = users
+        return Response(data={"cohorts": data})
+
+    def post(self, request):
+        course_id = request.data.get('course_id')
+        message = self.is_bad_course_id(course_id, check_cohorts_enabled=False)
+        if message:
+            data = {"error": message} if isinstance(message, basestring) else {}
+            return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
+        course_key = CourseKey.from_string(course_id)
+        mode = request.data.get('mode')
+        if not mode in self.ALLOWED_MODES:
+            return Response(data={"error": "Wrong mode '{}'".format(mode)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not is_course_cohorted(course_key):
+            set_course_cohort_settings(course_key, is_cohorted=True)
+        cohorts_dict = request.data.get('cohorts')
+        if not isinstance(cohorts_dict, dict):
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+        need_groups = cohorts_dict.keys()
+        if mode == 'verified':
+            need_groups = ["Verified " + name for name in need_groups]
+        course = modulestore().get_course(course_key)
+        have_groups = get_cohort_names(course).values()
+        create_groups = set(need_groups) - set(have_groups)
+        for name in create_groups:
+            # TODO: can it raise with bad name?
+            add_cohort(course_key, name, assignment_type=CourseCohort.MANUAL)
+            log.info("Cohort '{}' for course '{}' was created".format(name, course_key))
+
+        errors = []
+        for name, usernames in cohorts_dict.iteritems():
+            cohort = get_cohort_by_name(course_key, name)
+            for u in usernames:
+                try:
+                    add_user_to_cohort(cohort, u)
+                    log.info("User '{}' was enrolled at cohort '{}'".format(u, name))
+                except ValueError:
+                    # 'add_user_to_cohort' raises ValueError when user is already present in cohort, but it's ok
+                    pass
+                except User.DoesNotExist as e:
+                    error = {"user": u, "cohort": name, "error": str(e)}
+                    errors.append(error)
+                    log.error("{}: {}".format(error['error'], error['user']))
+        if errors:
+            return Response(data={"failed": errors}, status=status.HTTP_400_BAD_REQUEST)
+        return Response()
