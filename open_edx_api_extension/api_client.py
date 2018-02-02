@@ -18,6 +18,13 @@ class PlpApiClient(object):
     Checks that settings are setup, otherwise logs errors
     Returns data for supported actions
     """
+    PLP_API_URLS = {
+        "shift_group":"/api/course-shift-changed/",
+        "shift_membership":"/api/user-course-shift-changed/",
+        "shift_settings":"/api/course-shift-settings-changed/"
+
+    }
+
     def __init__(self):
         self.base_url = getattr(settings, "PLP_URL", None)
         self.api_key = getattr(settings, "PLP_API_KEY", None)
@@ -33,15 +40,69 @@ class PlpApiClient(object):
             log.error("Undefined LMS_ROOT_URL. Can't return to PLP CSV file absolute url")
             return
         csv_url = lms_url.strip("/") + local_url
-        return self._request(path, {"url": csv_url})
+        return self._post(path, {"url": csv_url})
 
-    def _request(self, path, data):
-        headers = {'x-plp-api-key': self.api_key}#, 'Content-Type': 'application/json'}
+    def push_shift_group(self, course_key, name, start_date):
+        url = self.PLP_API_URLS["shift_group"]
+        data = {
+            "course_id": str(course_key),
+            "name": name
+        }
+
+        if start_date:
+            data["start_date"] = start_date
+            return self._post(url, data)
+        else:
+            return self._delete(url, data)
+
+    def push_shifts_settings(self, course_key, enroll_before_days, enroll_after_days):
+        url = self.PLP_API_URLS["shift_settings"]
+        data = {
+            "course_id": str(course_key),
+            "enroll_before_days": enroll_before_days,
+            "enroll_after_days": enroll_after_days
+        }
+        return self._post(url, data)
+
+    def push_shift_membership(self, user, shift_from, shift_to):
+        url = self.PLP_API_URLS["shift_membership"]
+        username = user.username
+        course_id = shift_from.course_key if shift_from else shift_to.course_key
+        data = {
+            "username": username,
+            "course_id": str(course_id),
+        }
+
+        if shift_from and shift_to:
+            data["action"] = "transfer"
+            data["name"] = shift_to.name
+        elif shift_to:
+            data["action"] = "create"
+            data["name"] = shift_to.name
+        else:
+            data["action"] = "delete"
+            data["name"] = shift_from.name
+        self._post(url, data)
+
+    def _post(self, path, data, is_json=False):
+        return self._request(path, data, is_json, delete=False)
+
+    def _delete(self, path, data, is_json=False):
+        return self._request(path, data, is_json, delete=True)
+
+    def _request(self, path, data, is_json, delete=False):
+        headers = {'x-plp-api-key': self.api_key}
+        if is_json:
+            headers['Content-Type'] = 'application/json'
         request_url = "{}/{}/".format(
             self.base_url.strip("/"),
             path.strip("/")
         )
-        plp_response = requests.post(request_url, data=data, headers=headers)
+        if not delete:
+            plp_response = requests.post(request_url, data=data, headers=headers)
+        else:
+            plp_response = requests.delete(request_url, data=data, headers=headers)
+
         if plp_response.ok:
             return _get_json(plp_response)
         else:

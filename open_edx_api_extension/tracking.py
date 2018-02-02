@@ -55,7 +55,9 @@ def track_methods(method_names):
     """
     Decorator for models to make it send specific signal every time method(or classmethod)
     is called. Signal contains method name, args, kwargs and the method result.
-    Signal is the same for all methods listed in method_names
+    Signal is the same for all methods listed in method_names.
+    If method changes it's args/kwargs, signal receiver will get changed version,
+    not the one that came into the method
 
     Example:
         @track_methods(("foobar",))

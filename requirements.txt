@@ -1,0 +1,1 @@
+django-dirtyfields==1.3

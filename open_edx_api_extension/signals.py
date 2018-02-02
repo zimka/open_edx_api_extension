@@ -1,87 +1,61 @@
-import json
 import logging
-import requests
 
-from django.conf import settings
+from django.dispatch import receiver
+from .api_client import PlpApiClient
 
 try:
-    from course_shifts import shift_membership_changed_signal
-    from django.dispatch import receiver
-except ImportError as e:
-    shift_membership_changed_signal = None
+    from course_shifts.models import CourseShiftGroup, CourseShiftSettings, CourseShiftGroupMembership
+    group_signal = CourseShiftGroup.changed_signal
+    settings_signal = CourseShiftSettings.changed_signal
+    membership_signal = CourseShiftGroupMembership.method_called_signal
+except (ImportError, AttributeError) as e:
+    group_name_signal = group_signal = settings_signal = membership_signal = None
 
     def receiver(*args, **kwargs):
         return lambda x: x
-    logging.error("Failed to enable course shifts push into PLP: import error")
+    logging.error("Failed to enable course shifts push into PLP: import error:{}".format(e))
+
 
 log = logging.getLogger(__name__)
 
 
-def check_plp_course_shift_settings(func):
+@receiver(group_signal)
+def push_course_shift_group_changed(sender, old_fields, new_fields, forced_fields, **kwargs):
     """
-    If some necessary settings are not setup we will log every
-    attempt to push info into PLP as error.
+    Pushes CourseShiftGroup to PLP: creation, deletion and start_date change.
     """
-    plp_base_url = getattr(settings, "PLP_URL", None)
-    if not plp_base_url:
-        return lambda *ars, **kwargs: log.error("Course shifts can't be pushed: PLP_URL is not defined")
-
-    plp_api_key = getattr(settings, "PLP_API_KEY", None)
-    if not plp_api_key:
-        return lambda *args, **kwargs: log.error("Course shifts can't be pushed: PLP_API_KEY is not defined")
-
-    return func
+    course_key = forced_fields['course_key']
+    name = forced_fields['name']
+    start_date = new_fields.get('start_date', None)
+    PlpApiClient().push_shift_group(course_key, name, start_date)
 
 
-@receiver(shift_membership_changed_signal)
-@check_plp_course_shift_settings
-def push_course_shifts_info(sender, shift_group, specific_username=None, is_deleting=False, **kwargs):
+@receiver(settings_signal)
+def push_course_shifts_settings_changed(sender, old_fields, new_fields, forced_fields, **kwargs):
     """
-    When course shifts changed, push changes into PLP:
-    1. Single user transferred from one shift to another
-    (or removed from shifts at all, but this is impossible using provided UI)
-    2. Course Shift start_date was changed
-    3. Course Shift was deleted (not encouraged, but still possible)
+    Pushes CourseShiftSettings creation and deletion to PLP. Doesn't push deletion, because
+    it's impossible using insutructor or admin interfaces
     """
-    plp_shift_handler_url = getattr(
-        settings,
-        "PLP_COURSE_SHIFTS_HANDLER_URL",
-        "/api/user-course-shift-changed/"
-    )
-    url = settings.PLP_URL + plp_shift_handler_url
-    if is_deleting:
-        date = shift_group.settings.course_start_date
-    else:
-        date = shift_group.start_date
+    if new_fields:
+        # otherwise we have deleted settings, it's exceptional case
+        # that doesn't need push to plp
+        PlpApiClient().push_shifts_settings(**forced_fields)
 
-    if specific_username:
-        users_list = [specific_username]
-    else:
-        users_list = [u.username for u in shift_group.users.all()]
-        if not users_list:
-            # empty course shift, don't push
+
+@receiver(membership_signal)
+def push_course_shift_membership_changed(sender, method_name, args, kwargs, result, **true_kwargs):
+    """
+    Pushes CourseShiftGroupMembership change. It's supposed that membership changed via .transfer_user method.
+    """
+    if method_name == "transfer_user":
+        if not result:
             return
-
-    data = {
-        "course_id": str(shift_group.course_key),
-        "usernames": users_list,
-        "start_date": str(date)
-    }
-    headers = {'x-plp-api-key': settings.PLP_API_KEY, 'Content-Type': 'application/json'}
-
-    error_message_template = "Failed course shifts push to plp. Reason: {}"
-    try:
-        response = requests.post(url, data=json.dumps(data), headers=headers)
-    except Exception as e:
-        log.error(error_message_template.format(str(e)))
-        return
-
-    if response.ok:
-        return
-
-    response_message = "{} {};".format(response.status_code, response.reason)
-    try:
-        response_message += str(response.json())
-    except ValueError:
-        pass
-    log.error(error_message_template.format(response_message))
+        user = args[0]
+        shift_from = args[1]
+        shift_to = args[2]
+        if not shift_to and not shift_from:
+            # just to check, impossible case
+            return
+        PlpApiClient().push_shift_membership(user, shift_from, shift_to)
+    else:
+        log.error("Unexpected signal source: {}".format(method_name))
