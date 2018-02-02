@@ -1317,9 +1317,15 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
         cohorts_dict = request.data.get('cohorts')
         if not isinstance(cohorts_dict, dict):
             return Response(status=status.HTTP_400_BAD_REQUEST)
-        need_groups = cohorts_dict.keys()
+
         if mode == 'verified':
-            need_groups = ["Verified " + name for name in need_groups]
+            keys = cohorts_dict.keys()
+            for k in keys:
+                verified_key = "Verified " + k
+                cohorts_dict[verified_key] = cohorts_dict[k]
+                cohorts_dict.pop(k)
+
+        need_groups = cohorts_dict.keys()
         course = modulestore().get_course(course_key)
         have_groups = get_cohort_names(course).values()
         create_groups = set(need_groups) - set(have_groups)
