@@ -69,7 +69,7 @@ except ImportError:
     ProctoredExamStudentAttempt = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 from .models import CourseUserResultCache
-from .utils import student_grades
+from .utils import student_grades, EdxPlpCohortName
 
 
 class CourseUserResult(CourseViewMixin, RetrieveAPIView):
@@ -1173,6 +1173,7 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
 
 
 class CohortValidationMixin(object):
+
     @staticmethod
     def is_bad_course_id(course_id, check_cohorts_enabled=True):
         try:
@@ -1210,7 +1211,12 @@ class CourseCohortNames(CohortValidationMixin, APIView):
 
             400 - {"error": "<message>"}
 
-            200 - {"cohorts": ["cohort_name1", "cohort_name2", ...]
+            200 - {"cohorts": [
+                                  {"name":"cohort_name1", "mode":"honor"},
+                                  {"name":"cohort_name2", "mode":"verified"},
+                                  ...
+                              ]
+                  }
 
     """
 
@@ -1226,7 +1232,11 @@ class CourseCohortNames(CohortValidationMixin, APIView):
 
         course = modulestore().get_course(CourseKey.from_string(course_id))
         cohorts_names = get_cohort_names(course)
-        return Response(data={"cohorts": cohorts_names.values()})
+        plp_names = [EdxPlpCohortName.from_edx(name) for name in cohorts_names.values()]
+        plp_names = filter(lambda x: not x.is_hidden, plp_names)
+        return Response(data={
+            "cohorts": [x.plp_dict for x in plp_names]
+        })
 
 
 class CourseCohortsWithStudents(CohortValidationMixin, APIView):
@@ -1238,7 +1248,7 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
 
         **Example Requests**:
 
-            GET /api/extended/cohorts/cohorts_with_students
+            GET  /api/extended/cohorts/cohorts_with_students/
 
             POST /api/extended/cohorts/cohorts_with_students/
 
@@ -1252,7 +1262,12 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
 
             400 - {"error": "<message>"}
 
-            200 - {"cohorts": ["cohort_name1", "cohort_name2",...]
+            200 - {"cohorts": [
+                                  {"name":"cohort_name1", "mode":"honor", "usernames": ["name1", "name2", ...]},
+                                  {"name":"cohort_name2", "mode":"verified", "usernames": []},
+                                  ...
+                              ]
+                  }
 
         **Post Parameters**
 
@@ -1271,15 +1286,14 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
             400 - {"error": "<message>"}
 
             400 - {"failed":[
-                            {"user":"username1", "cohort":"cohort_name2", "error":"<reason>"}, ...
+                            {"username":"username1", "cohort":"cohort_name2", "error":"<reason>"},
+                            ...
                   ]}
 
             200 - Ok
     """
     authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
-
-    ALLOWED_MODES = ('honor', 'verified')
 
     @classmethod
     def as_view(cls, **initkwargs):
@@ -1294,11 +1308,16 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
 
         course = modulestore().get_course(CourseKey.from_string(course_id))
         cohorts = get_course_cohorts(course)
-        data = {}
+        data = []
         for group in cohorts:
             name = group.name
             users = [u.username for u in group.users.all()]
-            data[name] = users
+            plp_name = EdxPlpCohortName.from_edx(name)
+            if plp_name.is_hidden:
+                continue
+            plp_dict = plp_name.plp_dict
+            plp_dict["usernames"] = users
+            data.append(plp_dict)
         return Response(data={"cohorts": data})
 
     def post(self, request):
@@ -1308,24 +1327,20 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
             data = {"error": message} if isinstance(message, basestring) else {}
             return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
         course_key = CourseKey.from_string(course_id)
-        mode = request.data.get('mode')
-        if not mode in self.ALLOWED_MODES:
-            return Response(data={"error": "Wrong mode '{}'".format(mode)}, status=status.HTTP_400_BAD_REQUEST)
-
         if not is_course_cohorted(course_key):
             set_course_cohort_settings(course_key, is_cohorted=True)
+
         cohorts_dict = request.data.get('cohorts')
         if not isinstance(cohorts_dict, dict):
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
-        if mode == 'verified':
-            keys = cohorts_dict.keys()
-            for k in keys:
-                verified_key = "Verified " + k
-                cohorts_dict[verified_key] = cohorts_dict[k]
-                cohorts_dict.pop(k)
+        mode = request.data.get('mode')
+        try:
+            requested_cohorts = [EdxPlpCohortName.from_plp(name, mode) for name in cohorts_dict]
+        except ValueError as e:
+            return Response(data={"error": str(e)})
+        need_groups = [x.edx_name for x in requested_cohorts]
 
-        need_groups = cohorts_dict.keys()
         course = modulestore().get_course(course_key)
         have_groups = get_cohort_names(course).values()
         create_groups = set(need_groups) - set(have_groups)
@@ -1335,19 +1350,20 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
             log.info("Cohort '{}' for course '{}' was created".format(name, course_key))
 
         errors = []
-        for name, usernames in cohorts_dict.iteritems():
-            cohort = get_cohort_by_name(course_key, name)
+        for group in requested_cohorts:
+            usernames = cohorts_dict[group.plp_name]
+            cohort = get_cohort_by_name(course_key, group.edx_name)
             for u in usernames:
                 try:
                     add_user_to_cohort(cohort, u)
-                    log.info("User '{}' was enrolled at cohort '{}'".format(u, name))
+                    log.info("User '{}' was enrolled at cohort '{}'".format(u, group.edx_name))
                 except ValueError:
                     # 'add_user_to_cohort' raises ValueError when user is already present in cohort, but it's ok
                     pass
                 except User.DoesNotExist as e:
-                    error = {"user": u, "cohort": name, "error": str(e)}
+                    error = {"username": u, "cohort": group.plp_name, "error": str(e)}
                     errors.append(error)
-                    log.error("{}: {}".format(error['error'], error['user']))
+                    log.error("{}: {}".format(error['error'], error['username']))
         if errors:
             return Response(data={"failed": errors}, status=status.HTTP_400_BAD_REQUEST)
         return Response()

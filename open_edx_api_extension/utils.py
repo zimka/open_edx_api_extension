@@ -99,3 +99,56 @@ def store_links_for_user(store, course_id):
             (filename, store.storage.url(full_path))
             for filename, full_path in files
         ]
+
+
+class EdxPlpCohortName(object):
+    """
+    Cohort names from edx and plp points of view.
+    If cohort is verified,   name = VERIFIED_TAG + name.
+    Groups with names in HIDDEN_GROUPS are not shown to PLP
+    """
+    VERIFIED_TAG = "Verified "
+    ALLOWED_MODES = ("honor", "verified")
+    HIDDEN_GROUPS = ("Default Group", "verified")
+
+    def __init__(self, plp_name, mode):
+        if not mode in self.ALLOWED_MODES:
+            raise ValueError("Unacceptable mode: {}".format(mode))
+        self.plp_name = plp_name
+        self.mode = mode
+
+    @classmethod
+    def from_edx(cls, edx_name):
+        if edx_name.startswith(cls.VERIFIED_TAG):
+            mode = cls.ALLOWED_MODES[1]
+            plp_name = edx_name.split(cls.VERIFIED_TAG, 1)[1]
+        else:
+            mode = cls.ALLOWED_MODES[0]
+            plp_name = edx_name
+        return cls(plp_name, mode)
+
+    @classmethod
+    def from_plp(cls, plp_name, mode):
+        return cls(plp_name, mode)
+
+    @property
+    def is_verified(self):
+        return self.mode == self.ALLOWED_MODES[1]
+
+    @property
+    def is_hidden(self):
+        return self.plp_name in self.HIDDEN_GROUPS
+
+    @property
+    def edx_name(self):
+        name = self.plp_name
+        if self.is_verified:
+            name = self.VERIFIED_TAG + name
+        return name
+
+    @property
+    def plp_dict(self):
+        return {
+            "mode": self.mode,
+            "name": self.plp_name
+        }
