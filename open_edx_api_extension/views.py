@@ -51,10 +51,11 @@ log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
 try:
-    from edx_proctoring.models import ProctoredExamStudentAttempt
+    from edx_proctoring.models import ProctoredExamStudentAttempt, ProctoredCourse
     from edx_proctoring.api import remove_exam_attempt
 except ImportError:
     ProctoredExamStudentAttempt = None
+    ProctoredCourse = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 from .models import CourseUserResultCache
 from .utils import student_grades
@@ -153,6 +154,9 @@ class CourseListMixin(object):
                               OAuth2AuthenticationAllowInactiveUser)
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
+    def get_courses(self):
+        return modulestore().get_courses()
+
     def get_queryset(self):
         course_ids = self.request.query_params.get('course_id', None)
 
@@ -164,7 +168,7 @@ class CourseListMixin(object):
                 course_descriptor = courses.get_course(course_key)
                 results.append(course_descriptor)
         else:
-            results = modulestore().get_courses()
+            results = self.get_courses()
 
         proctoring_system = self.request.query_params.get('proctoring_system')
         if proctoring_system:
@@ -219,6 +223,12 @@ class CourseListWithExams(CourseListMixin, ListAPIView):
     Gets a list of courses with proctored exams
     """
     serializer_class = CourseWithExamsSerializer
+
+    def get_courses(self):
+        if ProctoredCourse:
+            return ProctoredCourse.fetch_all()
+        else:
+            return super(CourseListWithExams, self).get_courses()
 
 
 class SSOEnrollmentListView(EnrollmentListView):
