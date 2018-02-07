@@ -1338,7 +1338,7 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
         try:
             requested_cohorts = [EdxPlpCohortName.from_plp(name, mode) for name in cohorts_dict]
         except ValueError as e:
-            return Response(data={"error": str(e)})
+            return Response(data={"error": unicode(e)})
         need_groups = [x.edx_name for x in requested_cohorts]
 
         course = modulestore().get_course(course_key)
@@ -1347,7 +1347,7 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
         for name in create_groups:
             # TODO: can it raise with bad name?
             add_cohort(course_key, name, assignment_type=CourseCohort.MANUAL)
-            log.info("Cohort '{}' for course '{}' was created".format(name, course_key))
+            log.info(u"Cohort '{}' for course '{}' was created".format(name, course_key))
 
         errors = []
         for group in requested_cohorts:
@@ -1356,14 +1356,14 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
             for u in usernames:
                 try:
                     add_user_to_cohort(cohort, u)
-                    log.info("User '{}' was enrolled at cohort '{}'".format(u, group.edx_name))
+                    log.info(u"User '{}' was enrolled at cohort '{}'".format(u, group.edx_name))
                 except ValueError:
                     # 'add_user_to_cohort' raises ValueError when user is already present in cohort, but it's ok
                     pass
                 except User.DoesNotExist as e:
-                    error = {"username": u, "cohort": group.plp_name, "error": str(e)}
+                    error = {"username": u, "cohort": group.plp_name, "error": unicode(e)}
                     errors.append(error)
-                    log.error("{}: {}".format(error['error'], error['username']))
+                    log.error(u"{}: {}".format(error['error'], error['username']))
         if errors:
             return Response(data={"failed": errors}, status=status.HTTP_400_BAD_REQUEST)
         return Response()

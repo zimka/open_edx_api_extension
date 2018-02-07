@@ -113,7 +113,7 @@ class EdxPlpCohortName(object):
 
     def __init__(self, plp_name, mode):
         if not mode in self.ALLOWED_MODES:
-            raise ValueError("Unacceptable mode: {}".format(mode))
+            raise ValueError(u"Unacceptable mode: {}".format(mode))
         self.plp_name = plp_name
         self.mode = mode
 
