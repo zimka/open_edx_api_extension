@@ -25,6 +25,8 @@ from lms.djangoapps.verify_student.models import SoftwareSecurePhotoVerification
 from openedx.core.djangoapps.course_groups.cohorts import is_course_cohorted, get_cohort
 from .api_client import PlpApiClient
 from .utils import get_custom_grade_config
+from .models import InstructorTaskExtendedKwargs
+
 
 TASK_LOG = logging.getLogger('edx.celery.task')
 
@@ -35,9 +37,11 @@ def submit_calculate_grades_csv_users(request, course_key, usernames, callback_u
     """
     task_type = 'grade_users'
     task_class = calculate_grades_csv_task_for_users
+    extended_kwargs_id = InstructorTaskExtendedKwargs.get_id_for_kwargs({"usernames": usernames})
     task_input = {
-        "usernames": usernames,
         "requester_id": str(request.user.id),
+        "extended_kwargs_id": str(extended_kwargs_id),
+     #   "usernames":usernames,
         "callback_url": str(callback_url)
     }
     task_key = ""
@@ -74,14 +78,6 @@ def upload_user_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_i
     start_time = time()
     start_date = datetime.now(UTC)
     status_interval = 100
-    usernames = _task_input.get("usernames")
-
-    enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_id)
-    enrolled_students = enrolled_students.filter(username__in=usernames)
-    total_enrolled_students = enrolled_students.count()
-    requester_id = _task_input.get("requester_id")
-    task_progress = TaskProgress(action_name, total_enrolled_students, start_time)
-
     fmt = u'Task: {task_id}, InstructorTask ID: {entry_id}, Course: {course_id}, Input: {task_input}'
     task_info_string = fmt.format(
         task_id=_xmodule_instance_args.get('task_id') if _xmodule_instance_args is not None else None,
@@ -90,6 +86,23 @@ def upload_user_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_i
         task_input=_task_input
     )
     TASK_LOG.info(u'%s, Task type: %s, Starting task execution', task_info_string, action_name)
+
+    extended_kwargs_id = _task_input.get("extended_kwargs_id")
+    extended_kwargs = InstructorTaskExtendedKwargs.get_kwargs_for_id(extended_kwargs_id)
+    usernames = extended_kwargs.get("usernames", None)
+
+    err_rows = [["id", "username", "error_msg"]]
+    if usernames is None:
+        message = "Error occured during edx task execution: no usersnames in InstructorTaskExtendedKwargs."
+        TASK_LOG.error(u'%s, Task type: %s, ' + message, task_info_string)
+        err_rows.append(["-1", "__", message])
+        usernames = []
+
+    enrolled_students = CourseEnrollment.objects.users_enrolled_in(course_id)
+    enrolled_students = enrolled_students.filter(username__in=usernames)
+    total_enrolled_students = enrolled_students.count()
+    requester_id = _task_input.get("requester_id")
+    task_progress = TaskProgress(action_name, total_enrolled_students, start_time)
 
     course = get_course_by_id(course_id)
     course_is_cohorted = is_course_cohorted(course.id)
@@ -106,7 +119,6 @@ def upload_user_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_i
 
     # Loop over all our students and build our CSV lists in memory
     rows = []
-    err_rows = [["id", "username", "error_msg"]]
     current_step = {'step': 'Calculating Grades'}
 
     TASK_LOG.info(
@@ -271,7 +283,6 @@ def upload_user_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_i
     if callback_url:
         report_store = ReportStore.from_config(config_name=custom_grades_download)
         files_urls_pairs = report_store.links_for(course_id)
-        TASK_LOG.info((callback_url))
         find_by_name = lambda name: [url for filename, url in files_urls_pairs if name in filename][0]
         try:
             csv_url = find_by_name(report_name)
