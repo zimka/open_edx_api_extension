@@ -38,10 +38,10 @@ def submit_calculate_grades_csv_users(request, course_key, usernames, callback_u
     task_type = 'grade_users'
     task_class = calculate_grades_csv_task_for_users
     extended_kwargs_id = InstructorTaskExtendedKwargs.get_id_for_kwargs({"usernames": usernames})
+
     task_input = {
         "requester_id": str(request.user.id),
         "extended_kwargs_id": str(extended_kwargs_id),
-     #   "usernames":usernames,
         "callback_url": str(callback_url)
     }
     task_key = ""

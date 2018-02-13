@@ -1031,8 +1031,8 @@ class CalculateUsersGradeReport(APIView):
             request.user = User.objects.get(username=staff_username)
         except User.DoesNotExist:
             return JsonResponse({"error": "Bad staff username:'{}'".format(staff_username)}, status=status.HTTP_400_BAD_REQUEST)
-        usernames = request.data.get('users', [])
-        if not usernames:
+        usernames = request.data.get('users', None)
+        if usernames is None:
             return JsonResponse({"error": "No users in request"}, status=status.HTTP_400_BAD_REQUEST)
         callback_url = request.data.get('callback_url', None)
         if not callback_url:
