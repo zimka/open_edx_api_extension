@@ -35,7 +35,8 @@ class PlpApiClient(object):
         csv_url = lms_url.strip("/") + local_csv_url
         data = {"url": csv_url}
         if local_csv_err_url:
-            data["url_err"] = local_csv_err_url
+            csv_err_url = lms_url.strip("/") + local_csv_err_url
+            data["url_err"] = csv_err_url
         return self._request(path, data)
 
     def _request(self, path, data):
