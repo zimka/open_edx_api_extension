@@ -8,9 +8,12 @@ from edx_proctoring.api import get_all_exams_for_course
 from enrollment.serializers import CourseEnrollmentSerializer
 from lms.djangoapps.courseware.access import has_access
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
-from opaque_keys.edx.keys import CourseKey, UsageKey
+from opaque_keys.edx.keys import CourseKey
 from student.models import CourseEnrollment
 from xmodule.modulestore.django import modulestore
+from edx_proctoring.models import ProctoredCourse
+from edx_proctoring.api import get_xblock_exam_params
+
 
 VERIFIED = 'verified'
 
@@ -38,6 +41,9 @@ def get_user_proctored_exams(username, request):
     if not system:
         system = request.GET.get('system')
     result = {}
+
+    course_ids = []
+
     for enrollment in enrollments:
         course = enrollment.course
         if course and course.end and course.end < timezone.now():
@@ -54,55 +60,60 @@ def get_user_proctored_exams(username, request):
             name=VERIFIED
         )
 
-        if course_id not in result and cohorts.exists():
-            proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).available_proctoring_services.split(",")
-            if system and system not in proctoring_service:
-                continue
-            result[course_id] = {
-                "id": course_id,
-                "name": course.display_name,
-                "uri": request.build_absolute_uri(
-                    reverse('course_structure_api:v0:detail',
-                            kwargs={'course_id': course_id})),
-                "image_url": course.course_image_url,
-                "start": course.start,
-                "end": course.end,
-                "system": system,
-                'exams': []
-            }
-            exams = get_all_exams_for_course(course_id=course.id)
-            for exam in exams:
-                if exam['is_proctored']:
-                    item_id = UsageKey.from_string(exam['content_id'])
-                    item = modulestore().get_item(item_id)
-                    if len(proctoring_service) > 1 and not item.exam_proctoring_system:
-                        logging.warning("For course {} and exam {} proctoring service not specified. Available are {}".format(course_id, exam, proctoring_service))
-                        continue
-                    if len(proctoring_service) > 1 and item.exam_proctoring_system and item.exam_proctoring_system != system:
-                        logging.warning("For course {} and exam {} proctoring service is {}, but system is {}".format(course_id, exam, item.exam_proctoring_system, system))
-                        continue
-                    exam['visible_to_staff_only'] = item.visible_to_staff_only
-                    if hasattr(item, "exam_review_checkbox"):
-                        exam_review_checkbox = item.exam_review_checkbox
-                        if 'voice' in exam_review_checkbox:
-                            exam_review_checkbox['voices'] = exam_review_checkbox.pop('voice')
-                        if 'aid' in exam_review_checkbox:
-                            exam_review_checkbox['human_assistant'] = exam_review_checkbox.pop('aid')
-                        exam['exam_review_checkbox'] = exam_review_checkbox
-                    else:
-                        exam['exam_review_checkbox'] = {}
-                    oldest = None
-                    due_dates = []
-                    for vertical in item.get_children():
-                        if vertical.due:
-                            due_dates.append(vertical.due)
-                    if due_dates:
-                        oldest = min(due_dates)
-                    exam['deadline'] = oldest
-                    exam['start'] = item.start
-                    result[course_id]['exams'].append(exam)
-            result = {key: value for key, value in result.items() if
-                      len(value['exams']) > 0}
+        if course_id not in course_ids and cohorts.exists():
+            course_ids.append(course_id)
+
+    courses = []
+    if course_ids:
+        courses = ProctoredCourse.fetch_by_course_ids(course_ids)
+
+    for course in courses:
+        course_id = course.edx_id
+        proctoring_service = course.available_proctoring_services.split(",")
+        if system and system not in proctoring_service:
+            continue
+        result[course_id] = {
+            "id": course_id,
+            "name": course.display_name,
+            "uri": request.build_absolute_uri(
+                reverse('course_structure_api:v0:detail',
+                        kwargs={'course_id': course_id})),
+            "image_url": course.image_url,
+            "start": course.start,
+            "end": course.end,
+            "system": system,
+            'exams': []
+        }
+        exams = get_all_exams_for_course(course_id=course.id, detailed=True)
+        for exam in exams:
+            if exam['is_proctored']:
+                exam_data = exam['extended_params'] if exam['extended_params'] and exam['extended_params']['updated'] \
+                    else get_xblock_exam_params(exam['content_id'])
+
+                exam_proctoring_system = exam_data['service']
+                if len(proctoring_service) > 1 and not exam_proctoring_system:
+                    logging.warning("For course {} and exam {} proctoring service not specified. Available are {}"
+                                    .format(course_id, exam, proctoring_service))
+                    continue
+                if len(proctoring_service) > 1 and exam_proctoring_system and exam_proctoring_system != system:
+                    logging.warning("For course {} and exam {} proctoring service is {}, but system is {}"
+                                    .format(course_id, exam, exam_proctoring_system, system))
+                    continue
+
+                exam_review_checkbox = exam_data['exam_review_checkbox']
+                if 'voice' in exam_review_checkbox:
+                    exam_review_checkbox['voices'] = exam_review_checkbox.pop('voice')
+                if 'aid' in exam_review_checkbox:
+                    exam_review_checkbox['human_assistant'] = exam_review_checkbox.pop('aid')
+
+                exam['exam_review_checkbox'] = exam_review_checkbox
+                exam['visible_to_staff_only'] = exam_data['visible_to_staff_only']
+                exam['start'] = exam_data['start']
+                exam['deadline'] = exam_data['deadline']
+
+                result[course_id]['exams'].append(exam)
+        result = {key: value for key, value in result.items() if
+                  len(value['exams']) > 0}
     return result
 
 
