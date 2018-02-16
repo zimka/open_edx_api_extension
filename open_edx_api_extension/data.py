@@ -36,10 +36,14 @@ def get_course_enrollments(user_id=None, **kwargs):
 
 def get_user_proctored_exams(username, request):
     enrollments = CourseEnrollment.objects.filter(is_active=True,
-                                                  user__username=username)
+                                                  user__username=username,
+                                                  mode=VERIFIED)
     system = request.data.get('system')
     if not system:
         system = request.GET.get('system')
+    if system:
+        system = system.strip()
+
     result = {}
 
     course_ids = []
@@ -69,19 +73,19 @@ def get_user_proctored_exams(username, request):
 
     for course in courses:
         course_id = course.edx_id
-        proctoring_service = course.available_proctoring_services.split(",")
+        proctoring_service = [c.strip() for c in course.available_proctoring_services.split(',')]
         if system and system not in proctoring_service:
             continue
         result[course_id] = {
-            "id": course_id,
-            "name": course.display_name,
-            "uri": request.build_absolute_uri(
+            'id': course_id,
+            'name': course.display_name,
+            'uri': request.build_absolute_uri(
                 reverse('course_structure_api:v0:detail',
                         kwargs={'course_id': course_id})),
-            "image_url": course.image_url,
-            "start": course.start,
-            "end": course.end,
-            "system": system,
+            'image_url': course.image_url,
+            'start': course.start,
+            'end': course.end,
+            'system': system,
             'exams': []
         }
         exams = get_all_exams_for_course(course_id=course.id, detailed=True)
@@ -92,11 +96,11 @@ def get_user_proctored_exams(username, request):
 
                 exam_proctoring_system = exam_data['service']
                 if len(proctoring_service) > 1 and not exam_proctoring_system:
-                    logging.warning("For course {} and exam {} proctoring service not specified. Available are {}"
+                    logging.warning('For course {} and exam {} proctoring service not specified. Available are {}'
                                     .format(course_id, exam, proctoring_service))
                     continue
                 if len(proctoring_service) > 1 and exam_proctoring_system and exam_proctoring_system != system:
-                    logging.warning("For course {} and exam {} proctoring service is {}, but system is {}"
+                    logging.warning('For course {} and exam {} proctoring service is {}, but system is {}'
                                     .format(course_id, exam, exam_proctoring_system, system))
                     continue
 
@@ -121,11 +125,11 @@ def get_course_calendar(user, course_key_string):
     try:
         from icalendar import Calendar, Event
     except ImportError:
-        logging.error("Calendar module not installed")
+        logging.error('Calendar module not installed')
         return
 
     course_key = CourseKey.from_string(course_key_string)
-    checked = ["course", "vertical", "sequential"]
+    checked = ['course', 'vertical', 'sequential']
     items = modulestore().get_items(course_key)
     hour = timedelta(hours=1)
 
@@ -135,7 +139,7 @@ def get_course_calendar(user, course_key_string):
             continue
         if not item.graded:
             continue
-        if not has_access(user, "load", item, course_key=item.location.course_key):
+        if not has_access(user, 'load', item, course_key=item.location.course_key):
             continue
         if not item.due:
             continue
@@ -145,7 +149,7 @@ def get_course_calendar(user, course_key_string):
             format = 'course'
         url = u'http://{}{}'.format(settings.SITE_NAME, _reverse_usage(item))
         event = Event()
-        summary = u"Type: {}; Name: {}({})".format(format, item.display_name, url).encode('utf-8')
+        summary = u'Type: {}; Name: {}({})'.format(format, item.display_name, url).encode('utf-8')
         event.add('summary', summary)
         event.add('dtstart', item.due - hour)
         event.add('dtend', item.due)
