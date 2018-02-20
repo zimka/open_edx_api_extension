@@ -1,3 +1,4 @@
+import json
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -52,10 +53,11 @@ VERIFIED = 'verified'
 
 try:
     from edx_proctoring.models import ProctoredExamStudentAttempt, ProctoredCourse
-    from edx_proctoring.api import remove_exam_attempt
+    from edx_proctoring.api import remove_exam_attempt, _get_exam_attempt
 except ImportError:
     ProctoredExamStudentAttempt = None
     ProctoredCourse = None
+    _get_exam_attempt = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 from .models import CourseUserResultCache
 from .utils import student_grades
@@ -969,3 +971,41 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
         response = HttpResponse(text, content_type=mime, status=200)
         response['Content-Disposition'] = 'attachment; filename="{}_calendar.ics"'.format(course_key_string)
         return response
+
+
+class AttemptStatuses(APIView):
+
+    def post(self, request):  # pylint: disable=unused-argument
+        """
+        Returns the statuses of an exam attempts.
+        Similar to the /api/edx_proctoring/proctoring_poll_status/<attempt_code> but for more than 1 attempt_code.
+        """
+
+        try:
+            posted_data = json.loads(request.body.decode('utf-8'))
+            attempts_codes = posted_data['attempts']
+            if not isinstance(attempts_codes, list):
+                raise ValueError("'attempts' value in JSON request must be list")
+            if not attempts_codes:
+                raise ValueError("'attempts' list is empty")
+        except (ValueError, KeyError) as e:
+            return HttpResponse(
+                content='Invalid request body.',
+                status=400
+            )
+
+        attempts_dict = {}  # {'code': <SerializedAttemptObj> OR None}
+
+        for attempt_code in attempts_codes:
+            attempts_dict[attempt_code] = None
+
+        attempts = ProctoredExamStudentAttempt.objects.filter(attempt_code__in=attempts_codes)
+        for attempt in attempts:
+            exam_attempt = _get_exam_attempt(attempt)
+            attempts_dict[attempt.attempt_code] = exam_attempt['status'] if exam_attempt else None
+
+        log.info("Attempts statuses: {}".format(unicode(attempts_dict)))
+        return Response(
+            data=attempts_dict,
+            status=200
+        )
