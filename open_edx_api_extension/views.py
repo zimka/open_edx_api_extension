@@ -974,6 +974,25 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
 
 
 class AttemptStatuses(APIView):
+    """
+        **Use Cases**
+            This endpoint is called by a 3rd party proctoring review service to determine
+            status of an exam attempts.
+
+
+        **Example Requests**:
+
+            POST /api/extended/edx_proctoring/proctoring_poll_statuses_attempts/
+
+        **Post Parameters**
+
+            * JSON body in format {'attempts': ['<code_1>', '<code_2>', ... , '<code_n>']}
+
+        **Response Values**
+
+            200 - JSON response in format: {'<code_1>': '<status_1>', ..., '<code_n>': '<status_n>'}
+
+    """
 
     def post(self, request):  # pylint: disable=unused-argument
         """
@@ -994,11 +1013,7 @@ class AttemptStatuses(APIView):
                 status=400
             )
 
-        attempts_dict = {}  # {'code': <SerializedAttemptObj> OR None}
-
-        for attempt_code in attempts_codes:
-            attempts_dict[attempt_code] = None
-
+        attempts_dict = {attempt_code: None for attempt_code in attempts_codes}
         attempts = ProctoredExamStudentAttempt.objects.filter(attempt_code__in=attempts_codes)
         for attempt in attempts:
             exam_attempt = _get_exam_attempt(attempt)
