@@ -52,10 +52,11 @@ log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
 try:
-    from edx_proctoring.models import ProctoredExamStudentAttempt, ProctoredCourse
+    from edx_proctoring.models import ProctoredExamStudentAttempt, ProctoredExamStudentAttemptCustom, ProctoredCourse
     from edx_proctoring.api import remove_exam_attempt, _get_exam_attempt
 except ImportError:
     ProctoredExamStudentAttempt = None
+    ProctoredExamStudentAttemptCustom = None
     ProctoredCourse = None
     _get_exam_attempt = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
@@ -1018,6 +1019,13 @@ class AttemptStatuses(APIView):
         for attempt in attempts:
             exam_attempt = _get_exam_attempt(attempt)
             attempts_dict[attempt.attempt_code] = exam_attempt['status'] if exam_attempt else None
+
+        attempt_custom_status_check = [attempt_code for attempt_code, attempt_status in attempts_dict.iteritems()
+                                       if attempt_status is None]
+        if attempt_custom_status_check:
+            attempts = ProctoredExamStudentAttemptCustom.objects.filter(attempt_code__in=attempt_custom_status_check)
+            for attempt in attempts:
+                attempts_dict[attempt.attempt_code] = attempt.status
 
         log.info("Attempts statuses: {}".format(unicode(attempts_dict)))
         return Response(
