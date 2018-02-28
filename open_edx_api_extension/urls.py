@@ -19,4 +19,6 @@ urlpatterns = [
     url(r'^calendar/{}'.format(settings.COURSE_KEY_PATTERN), views.CourseCalendar.as_view(), name="course-calendar"),
     url(r'edx_proctoring/proctoring_poll_statuses_attempts/$', views.AttemptStatuses.as_view(),
         name='edx_proctoring.anonymous.proctoring_poll_statuses_attempts'),
+    url(r'edx_proctoring/attempts_bulk_update/$', views.AttemptsBulkUpdate.as_view(),
+        name='edx_proctoring.attempts_bulk_update'),
 ]

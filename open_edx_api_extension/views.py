@@ -53,12 +53,13 @@ VERIFIED = 'verified'
 
 try:
     from edx_proctoring.models import ProctoredExamStudentAttempt, ProctoredExamStudentAttemptCustom, ProctoredCourse
-    from edx_proctoring.api import remove_exam_attempt, _get_exam_attempt
+    from edx_proctoring.api import remove_exam_attempt, _get_exam_attempt, update_attempt_status
 except ImportError:
     ProctoredExamStudentAttempt = None
     ProctoredExamStudentAttemptCustom = None
     ProctoredCourse = None
     _get_exam_attempt = None
+    update_attempt_status = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 from .models import CourseUserResultCache
 from .utils import student_grades
@@ -995,7 +996,7 @@ class AttemptStatuses(APIView):
 
     """
 
-    def post(self, request):  # pylint: disable=unused-argument
+    def post(self, request):
         """
         Returns the statuses of an exam attempts.
         Similar to the /api/edx_proctoring/proctoring_poll_status/<attempt_code> but for more than 1 attempt_code.
@@ -1003,7 +1004,7 @@ class AttemptStatuses(APIView):
 
         try:
             posted_data = json.loads(request.body.decode('utf-8'))
-            attempts_codes = posted_data['attempts']
+            attempts_codes = posted_data.get('attempts')
             if not isinstance(attempts_codes, list):
                 raise ValueError("'attempts' value in JSON request must be list")
             if not attempts_codes:
@@ -1030,5 +1031,78 @@ class AttemptStatuses(APIView):
         log.info("Attempts statuses: {}".format(unicode(attempts_dict)))
         return Response(
             data=attempts_dict,
+            status=200
+        )
+
+
+class AttemptsBulkUpdate(APIView):
+    """
+        **Use Cases**
+            This endpoint is called by a 3rd party proctoring review service to update group of attempts.
+
+
+        **Example Requests**:
+
+            POST /api/extended/edx_proctoring/attempts_bulk_update/
+
+        **Post Parameters**
+
+            * JSON body in format
+               {'attempts': [
+                   {'code': '<code_1>', 'user_id': '<user_id_1>', 'new_status': '<new_status_1>'},
+                   ...
+                   {'code': '<code_n>', 'user_id': '<user_id_n>', 'new_status': '<new_status_n>'}
+               ]}
+
+        **Response Values**
+
+            200 - JSON response in format:
+            {
+             '<code_1>': {'status': '<new_status_1>'},
+             ...
+             '<code_n>': {'status': '<new_status_n>'}
+            }
+
+    """
+
+    permission_classes = (ApiKeyHeaderPermissionIsAuthenticated,)
+
+    def post(self, request):
+        """
+        Returns the statuses of an exam attempts.
+        """
+
+        try:
+            posted_data = json.loads(request.body.decode('utf-8'))
+            attempts = posted_data.get('attempts')
+            if not isinstance(attempts, list):
+                raise ValueError("'attempts' value in JSON request must be list")
+            if not attempts:
+                raise ValueError("'attempts' list is empty")
+        except (ValueError, KeyError) as e:
+            return HttpResponse(
+                content='Invalid request body.',
+                status=400
+            )
+
+        result = {}
+        attempts_dict = {attempt['code']: attempt for attempt in attempts}
+        attempts = ProctoredExamStudentAttempt.objects.filter(attempt_code__in=attempts_dict.keys())
+        for attempt in attempts:
+            user_id = attempts_dict[attempt.attempt_code]['user_id']
+            new_status = attempts_dict[attempt.attempt_code]['new_status']
+
+            try:
+                update_attempt_status(attempt.proctored_exam_id, user_id, new_status)
+                result[attempt.attempt_code] = {'status': new_status}
+            except Exception, e:
+                log.info("Exception during update status (new status '{}') for user_id={} attempt_id={}: {}"
+                         .format(unicode(new_status), unicode(user_id), unicode(attempt.id), unicode(e)))
+                result[attempt.attempt_code] = {'status': attempt.status}
+
+        log.info("New attempts statuses after update: {}".format(unicode(result)))
+
+        return Response(
+            data=result,
             status=200
         )
