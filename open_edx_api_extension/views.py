@@ -1044,6 +1044,11 @@ class CalculateUsersGradeReport(APIView):
             return JsonResponse({"error": "No course_id in request"}, status=status.HTTP_400_BAD_REQUEST)
 
         course_key = CourseKey.from_string(course_id)
+        if not modulestore().has_course(course_key):
+            return JsonResponse(
+                {"error": "course with id {} not found".format(course_id)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         try:
             submit_calculate_grades_csv_users(request, course_key, usernames, callback_url)
             return JsonResponse({"status": "Started"})
