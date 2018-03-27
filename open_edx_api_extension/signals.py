@@ -53,9 +53,12 @@ def push_course_shift_membership_changed(sender, method_name, args, kwargs, resu
         user = args[0]
         shift_from = args[1]
         shift_to = args[2]
+        requester = None
+        if 'requester' in kwargs:
+            requester = kwargs['requester']
         if not shift_to and not shift_from:
             # just to check, impossible case
             return
-        PlpApiClient().push_shift_membership(user, shift_from, shift_to)
+        PlpApiClient().push_shift_membership(user, shift_from, shift_to, requester)
     else:
         log.error("Unexpected signal source: {}".format(method_name))

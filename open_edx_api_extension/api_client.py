@@ -64,7 +64,7 @@ class PlpApiClient(object):
         }
         return self._post(url, data)
 
-    def push_shift_membership(self, user, shift_from, shift_to):
+    def push_shift_membership(self, user, shift_from, shift_to, requester):
         url = self.PLP_API_URLS["shift_membership"]
         username = user.username
         course_id = shift_from.course_key if shift_from else shift_to.course_key
@@ -82,6 +82,10 @@ class PlpApiClient(object):
         else:
             data["action"] = "delete"
             data["name"] = shift_from.name
+        requester_name =  username
+        if requester and not requester.is_anonymous():
+            requester_name = requester.username
+        data["requester"] = requester_name
         self._post(url, data)
 
     def _post(self, path, data, is_json=False):
