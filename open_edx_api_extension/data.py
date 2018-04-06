@@ -37,6 +37,8 @@ def get_user_proctored_exams(username, request):
     system = request.data.get('system')
     if not system:
         system = request.GET.get('system')
+    if system and 'ITMO' in system:
+        system = 'ITMO'
     result = {}
     for enrollment in enrollments:
         course = enrollment.course
@@ -74,11 +76,16 @@ def get_user_proctored_exams(username, request):
             for exam in exams:
                 if exam['is_proctored']:
                     item_id = UsageKey.from_string(exam['content_id'])
-                    item = modulestore().get_item(item_id)
+                    try:
+                        item = modulestore().get_item(item_id)
+                    except:
+                        logging.warning("Item {} not found".format(item_id))
+                        continue
+                    logging.warning("{} {}".format(proctoring_service, item.exam_proctoring_system))
                     if len(proctoring_service) > 1 and not item.exam_proctoring_system:
                         logging.warning("For course {} and exam {} proctoring service not specified. Available are {}".format(course_id, exam, proctoring_service))
                         continue
-                    if len(proctoring_service) > 1 and item.exam_proctoring_system and item.exam_proctoring_system != system:
+                    if len(proctoring_service) > 1 and item.exam_proctoring_system and system and item.exam_proctoring_system != system:
                         logging.warning("For course {} and exam {} proctoring service is {}, but system is {}".format(course_id, exam, item.exam_proctoring_system, system))
                         continue
                     exam['visible_to_staff_only'] = item.visible_to_staff_only

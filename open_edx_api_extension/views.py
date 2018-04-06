@@ -180,6 +180,8 @@ class CourseListMixin(object):
 
         proctoring_system = self.request.query_params.get('proctoring_system')
         if proctoring_system:
+            if 'ITMO' in proctoring_system:
+                proctoring_system = 'ITMO'
             results = (course for course in results if
                        proctoring_system in course.available_proctoring_services.split(','))
 
