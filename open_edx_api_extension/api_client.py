@@ -31,7 +31,12 @@ class PlpApiClient(object):
         if self.base_url is None or self.api_key is None:
             self._request = self._dummy
 
-    def push_grade_api_result(self, path, local_url):
+    def normalize_url(self, url, lms_url):
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        return lms_url.strip("/") + url
+
+    def push_grade_api_result(self, path, local_csv_url, local_csv_err_url):
         """
         Returns url with requests CSV grade sheet
         """
@@ -39,8 +44,12 @@ class PlpApiClient(object):
         if not lms_url:
             log.error("Undefined LMS_ROOT_URL. Can't return to PLP CSV file absolute url")
             return
-        csv_url = lms_url.strip("/") + local_url
-        return self._post(path, {"url": csv_url})
+
+        data = {"url": self.normalize_url(local_csv_url, lms_url)}
+        if local_csv_err_url:
+            data["url_err"] = self.normalize_url(local_csv_err_url, lms_url)
+        return self._post(path, data)
+
 
     def push_shift_group(self, course_key, name, start_date):
         url = self.PLP_API_URLS["shift_group"]

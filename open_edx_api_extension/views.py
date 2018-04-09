@@ -31,8 +31,9 @@ from xmodule.modulestore.django import modulestore
 
 from openedx.core.djangoapps.course_groups.cohorts import (
     is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
-    get_cohort_names, get_course_cohorts, CourseCohort, set_course_cohort_settings
+    get_cohort_names, get_course_cohorts, CourseCohort
 )
+from .edx_release import set_course_cohort_settings
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
 from openedx.core.lib.api.authentication import (
