@@ -57,7 +57,10 @@ def get_user_proctored_exams(username, request):
         )
 
         if course_id not in result and cohorts.exists():
-            proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).available_proctoring_services.split(",")
+            try:
+                proctoring_service = modulestore().get_course(CourseKey.from_string(course_id)).available_proctoring_services.split(",")
+            except:
+                continue
             if system and system not in proctoring_service:
                 continue
             result[course_id] = {

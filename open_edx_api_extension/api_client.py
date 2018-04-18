@@ -44,6 +44,14 @@ class PlpApiClient(object):
 
         return self._request(path, data)
 
+
+    def push_course_user_group_changed(self, course_id, username, group_name):
+        data = {}
+        data['course_id'] = str(course_id)
+        data['username'] = username
+        data['group_name'] = group_name
+        self._request('api/user-add-group', data)
+
     def _request(self, path, data):
         headers = {'x-plp-api-key': self.api_key}#, 'Content-Type': 'application/json'}
         request_url = "{}/{}/".format(
