@@ -43,6 +43,8 @@ def get_user_proctored_exams(username, request):
         system = request.GET.get('system')
     if system:
         system = system.strip()
+        if 'ITMO' in system:
+            system = 'ITMO'
 
     result = {}
 

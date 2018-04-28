@@ -15,10 +15,16 @@ urlpatterns = [
     url(r'^update_verified_cohort$', views.UpdateVerifiedCohort.as_view()),
     url(r'^subscriptions$', views.Subscriptions.as_view()),
     url(r'^credentials$', views.Credentials.as_view()),
+    #url(r'^calculate_grades_csv/{}/$'.format(settings.COURSE_ID_PATTERN),
+    #    views.view_grades_csv_for_users),
+    #url(r'^users_grade_reports/$', views.UsersGradeReports.as_view())
+    url(r'^users_grade_reports/$', views.CalculateUsersGradeReport.as_view()),
     url(r'^user_proctored_exam_attempt/(?P<attempt_code>[^/]*)/$', views.ProctoredExamsAttemptView.as_view()),
     url(r'^calendar/{}'.format(settings.COURSE_KEY_PATTERN), views.CourseCalendar.as_view(), name="course-calendar"),
     url(r'edx_proctoring/proctoring_poll_statuses_attempts/$', views.AttemptStatuses.as_view(),
         name='edx_proctoring.anonymous.proctoring_poll_statuses_attempts'),
     url(r'edx_proctoring/attempts_bulk_update/$', views.AttemptsBulkUpdate.as_view(),
         name='edx_proctoring.attempts_bulk_update'),
+    url(r'^cohorts/cohort_names', views.CourseCohortNames.as_view()),
+    url(r'^cohorts/cohorts_with_students', views.CourseCohortsWithStudents.as_view()),
 ]

@@ -6,6 +6,8 @@ from django.conf import settings
 from django.http import HttpResponse
 from django.db import transaction
 from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.http import JsonResponse
 
 from rest_framework.generics import RetrieveAPIView, ListAPIView
 from rest_framework.response import Response
@@ -29,6 +31,7 @@ from xmodule.modulestore.django import modulestore
 
 from openedx.core.djangoapps.course_groups.cohorts import (
     is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
+    get_cohort_names, get_course_cohorts, CourseCohort, set_course_cohort_settings
 )
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
@@ -44,10 +47,18 @@ from enrollment.errors import (
     CourseModeNotFoundError, CourseEnrollmentExistsError
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
+from lms.djangoapps.instructor.views.api import require_level
+from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
+from lms.djangoapps.instructor_task.models import ReportStore
+
 
 from track import views as track_views
 
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
+
+from .tasks import submit_calculate_grades_csv_users
+from .utils import get_custom_grade_config
+
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
@@ -62,7 +73,7 @@ except ImportError:
     update_attempt_status = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 from .models import CourseUserResultCache
-from .utils import student_grades
+from .utils import student_grades, EdxPlpCohortName
 
 
 class CourseUserResult(CourseViewMixin, RetrieveAPIView):
@@ -176,6 +187,8 @@ class CourseListMixin(object):
 
         proctoring_system = self.request.query_params.get('proctoring_system')
         if proctoring_system:
+            if 'ITMO' in proctoring_system:
+                proctoring_system = 'ITMO'
             results = (course for course in results if
                        proctoring_system in course.available_proctoring_services.split(','))
 
@@ -854,6 +867,210 @@ class Credentials(APIView, ApiKeyPermissionMixIn):
         return Response(data=creds)
 
 
+# TODO: this one is currently deprecated, should be removed later
+@transaction.non_atomic_requests
+@ensure_csrf_cookie
+@require_level('staff')
+def view_grades_csv_for_users(request, course_id):
+    """
+    Example: GET http://edx.local.se:8000/api/extended/calculate_grades_csv/course-v1:test_o+test_n+test_r?usernames=["test","test1"]
+    """
+    course_key = CourseKey.from_string(course_id)
+    try:
+        usernames_str = request.GET.get("usernames")
+        usernames = json.loads(usernames_str)
+    except AttributeError as e:
+        logging.error("API extensions, user grades error: {}".format(str(e)))
+        return JsonResponse({"status": "An error occured: failed to get usernames from request"})
+    try:
+        submit_calculate_grades_csv_users(request, course_key, usernames)
+        success_status = ("The grade report is being created."
+                           " To view the status of the report, see Pending Tasks below.")
+        return JsonResponse({"status": success_status})
+    except AlreadyRunningError:
+        already_running_status = ("The grade report is currently being created."
+                                   " To view the status of the report, see Pending Tasks below."
+                                   " You will be able to download the report when it is complete.")
+        return JsonResponse({"status": already_running_status})
+
+
+# TODO: this one is currently deprecated, should be removed later
+class UsersGradeReports(APIView, ApiKeyPermissionMixIn):
+    """
+        **Use Cases**
+
+            Used to get reports urls for given course_id and given usenames
+
+        **Example Requests**:
+
+            GET /api/extended/users_grade_reports{
+                "course_ids": ["course-v1:edX+DemoX+Demo_Course", ...]
+                "usernames": ["test"]
+            }
+
+        **Response Values**
+
+            {
+                "course_id_1": {"reports":{
+                    "username_1_1":[url_report1.csv, ..., url_reportn.csv],
+                    "broken_username":"Error: user not found",
+                     ...
+                    "username_1_n": {...}
+                    }
+                }
+                "broken_course_id":{"error":"No course for this course_id"}
+                ...
+                "course_id_m": {"reports":{...}}
+            }
+            OR
+            {"error": "<Some fatal error>"}
+
+    """
+
+    #authentication_classes = OAuth2AuthenticationAllowInactiveUser,
+    #permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request):
+        #collect data
+        data_get = dict(request.GET.iterlists())
+        def unjson(s):
+            try:
+                return json.loads(s)
+            except:
+                return s
+
+        try:
+            usernames = (data_get.get("usernames"))
+            usernames = unjson(usernames)
+            if isinstance(usernames,unicode):
+                usernames = [usernames]
+        except Exception as e:
+            logging.error("API got incorrect usernames: {}".format(str(e)))
+            return Response(data={"error": "Given usenames are incorrect"})
+
+        try:
+            course_ids = (data_get.get("course_ids"))
+            course_ids = unjson(course_ids)
+            if isinstance(course_ids, unicode):
+                course_ids = [course_ids]
+        except Exception as e:
+            logging.error("API got incorrect course_ids: {}".format(str(e)))
+            return Response(data={"error": "Given usenames incorrect; Exception:{}".format(str(e))})
+
+        #check existance of users from usernames
+        users = User.objects.filter(username__in=usernames)
+        users_dict = dict((u.username, u.id) for u in users)
+        if not users_dict:
+            return Response(data={"error": "No user for any of given usernames"})
+        id_user_map = dict((users_dict[x], x) for x in users_dict)
+        users_not_found = [uname for uname in usernames if uname not in users_dict]
+        if users_not_found:
+            msg = "Requested users not found: {}".format(",".join(users_not_found))
+            logging.error(msg)
+        users_dict.update({(uname, None) for uname in users_not_found})
+
+        #check existance of courses from course_ids
+        course_ids_dict = {}
+        for cid in course_ids:
+            try:
+                ckey = CourseKey.from_string(cid)
+                course_ids_dict[cid] = ckey
+            except:
+                logging.error("No course for course_id given to API: {}".format(cid))
+                course_ids_dict[cid] = None
+                continue
+        if not [cid for cid in course_ids if course_ids_dict[cid]]:
+            return Response(data={"error": "No course for any of given course_ids"})
+
+        answer_data = dict((cid, {}) for cid in course_ids_dict)
+        report_store = ReportStore.from_config(config_name=get_custom_grade_config())
+        for cid in course_ids_dict:
+            if not course_ids_dict[cid]:
+                answer_data[cid] = {"error":"No course for this course_id"}
+                continue
+            file_urls = report_store.links_for(course_ids_dict[cid])
+            current_reports = {}
+            for uname in users_dict:
+                if users_dict[uname]:
+                    current_reports[uname] = []
+                else:
+                    current_reports[uname] = "Error: user not found"
+
+            for name, url in file_urls:
+                name_parts = name.split("_")
+                url_id = int(name_parts[name_parts.index('id') + 1])
+                url_uname = id_user_map.get(url_id, None) # None means this user wasn't requested
+                if url_uname:
+                    current_reports[url_uname].append(url)
+            answer_data[cid] = {"reports":current_reports}
+        return Response(data=answer_data)
+
+
+class CalculateUsersGradeReport(APIView):
+    """
+        **Use Cases**
+
+            Allows to request grading list calculation for course it against
+            listed users. When task finished, it notifies client on given
+            callback url about the result.
+            Requires apllication/json content-type
+
+
+        **Example Requests**:
+
+            POST /api/extended/calculate_grade_reports{
+                "course_id": "course-v1:edX+DemoX+Demo_Course"
+                "users": ["test", "test2"],
+                "staff_username": "instructor_username",
+                "callback_url": "plp.npoed.ru/grade_handle/"
+            }
+
+        **Response Values**
+
+            200: if task is taken in processing
+
+            400: {"error": "<Error description>"}if error occurred
+
+    """
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    @classmethod
+    def as_view(cls, **initkwargs):
+        """Run as_view() non_atomic"""
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
+    def post(self, request):
+        staff_username = request.data.get('staff_username')
+        try:
+            request.user = User.objects.get(username=staff_username)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "Bad staff username:'{}'".format(staff_username)}, status=status.HTTP_400_BAD_REQUEST)
+        usernames = request.data.get('users', None)
+        if usernames is None:
+            return JsonResponse({"error": "No users in request"}, status=status.HTTP_400_BAD_REQUEST)
+        callback_url = request.data.get('callback_url', None)
+        if not callback_url:
+            return JsonResponse({"error": "No callback_url in request"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # TODO: better make it part of url scheme
+        course_id = request.data.get('course_id')
+        if not course_id:
+            return JsonResponse({"error": "No course_id in request"}, status=status.HTTP_400_BAD_REQUEST)
+
+        course_key = CourseKey.from_string(course_id)
+        if not modulestore().has_course(course_key):
+            return JsonResponse(
+                {"error": "course with id {} not found".format(course_id)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            submit_calculate_grades_csv_users(request, course_key, usernames, callback_url)
+            return JsonResponse({"status": "Started"})
+        except AlreadyRunningError:
+            return JsonResponse({"status": "AlreadyRunning"})
+
+
 def check_proctored_exams_attempt_turn_on(method):
     """
     Checks that option is turned on
@@ -1106,3 +1323,200 @@ class AttemptsBulkUpdate(APIView):
             data=result,
             status=200
         )
+
+
+class CohortValidationMixin(object):
+
+    @staticmethod
+    def is_bad_course_id(course_id, check_cohorts_enabled=True):
+        try:
+            course_key = CourseKey.from_string(course_id)
+        except (InvalidKeyError, AttributeError) as e:
+            return True
+
+        if not modulestore().has_course(course_key):
+            return "course with id {} not found".format(course_id)
+
+        if not check_cohorts_enabled:
+            return
+
+        if not is_course_cohorted(course_key):
+            return "cohorts disabled for course with id {}".format(course_id)
+
+
+class CourseCohortNames(CohortValidationMixin, APIView):
+    """
+        **Use Cases**
+
+            Allows to get names of course cohorts if they are enabled for course
+
+        **Example Requests**:
+
+            GET /api/extended/cohorts/cohort_names
+
+        **Get Parameters**
+
+            * course_id: The unique identifier for the course.
+
+        **Response Values**
+
+            400 - bad course_id or absent,
+
+            400 - {"error": "<message>"}
+
+            200 - {"cohorts": [
+                                  {"name":"cohort_name1", "mode":"honor"},
+                                  {"name":"cohort_name2", "mode":"verified"},
+                                  ...
+                              ]
+                  }
+
+    """
+
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    def get(self, request):
+        course_id = request.query_params.get('course_id')
+        message = self.is_bad_course_id(course_id)
+        if message:
+            data = {"error": message} if isinstance(message, basestring) else {}
+            return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
+
+        course = modulestore().get_course(CourseKey.from_string(course_id))
+        cohorts_names = get_cohort_names(course)
+        plp_names = [EdxPlpCohortName.from_edx(name) for name in cohorts_names.values()]
+        plp_names = filter(lambda x: not x.is_hidden, plp_names)
+        return Response(data={
+            "cohorts": [x.plp_dict for x in plp_names]
+        })
+
+
+class CourseCohortsWithStudents(CohortValidationMixin, APIView):
+    """
+        **Use Cases**
+
+            Allows to get cohorts with listed users or set
+            Post requires apllication/json content-type
+
+        **Example Requests**:
+
+            GET  /api/extended/cohorts/cohorts_with_students/
+
+            POST /api/extended/cohorts/cohorts_with_students/
+
+        **Get Parameters**
+
+            * course_id: The unique identifier for the course.
+
+        **Get Response Values**
+
+            400 - bad course_id or absent,
+
+            400 - {"error": "<message>"}
+
+            200 - {"cohorts": [
+                                  {"name":"cohort_name1", "mode":"honor", "usernames": ["name1", "name2", ...]},
+                                  {"name":"cohort_name2", "mode":"verified", "usernames": []},
+                                  ...
+                              ]
+                  }
+
+        **Post Parameters**
+
+            Application/json content-type
+
+            * course_id: The unique identifier for the course.
+
+            * mode: honor/verified
+
+            * cohorts: {"cohort_name1": ["user1",...], "cohort_name2": ...}
+
+        **Post Response Values**
+
+            400 - bad course_id or absent,
+
+            400 - {"error": "<message>"}
+
+            400 - {"failed":[
+                            {"username":"username1", "cohort":"cohort_name2", "error":"<reason>"},
+                            ...
+                  ]}
+
+            200 - Ok
+    """
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
+    def get(self, request):
+        course_id = request.query_params.get('course_id')
+        message = self.is_bad_course_id(course_id)
+        if message:
+            data = {"error": message} if isinstance(message, basestring) else {}
+            return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
+
+        course = modulestore().get_course(CourseKey.from_string(course_id))
+        cohorts = get_course_cohorts(course)
+        data = []
+        for group in cohorts:
+            name = group.name
+            users = [u.username for u in group.users.all()]
+            plp_name = EdxPlpCohortName.from_edx(name)
+            if plp_name.is_hidden:
+                continue
+            plp_dict = plp_name.plp_dict
+            plp_dict["usernames"] = users
+            data.append(plp_dict)
+        return Response(data={"cohorts": data})
+
+    def post(self, request):
+        course_id = request.data.get('course_id')
+        message = self.is_bad_course_id(course_id, check_cohorts_enabled=False)
+        if message:
+            data = {"error": message} if isinstance(message, basestring) else {}
+            return Response(data=data, status=status.HTTP_400_BAD_REQUEST)
+        course_key = CourseKey.from_string(course_id)
+        if not is_course_cohorted(course_key):
+            set_course_cohort_settings(course_key, is_cohorted=True)
+
+        cohorts_dict = request.data.get('cohorts')
+        if not isinstance(cohorts_dict, dict):
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        mode = request.data.get('mode')
+        try:
+            requested_cohorts = [EdxPlpCohortName.from_plp(name, mode) for name in cohorts_dict]
+        except ValueError as e:
+            return Response(data={"error": unicode(e)})
+        need_groups = [x.edx_name for x in requested_cohorts]
+
+        course = modulestore().get_course(course_key)
+        have_groups = get_cohort_names(course).values()
+        create_groups = set(need_groups) - set(have_groups)
+        for name in create_groups:
+            # TODO: can it raise with bad name?
+            add_cohort(course_key, name, assignment_type=CourseCohort.MANUAL)
+            log.info(u"Cohort '{}' for course '{}' was created".format(name, course_key))
+
+        errors = []
+        for group in requested_cohorts:
+            usernames = cohorts_dict[group.plp_name]
+            cohort = get_cohort_by_name(course_key, group.edx_name)
+            for u in usernames:
+                try:
+                    add_user_to_cohort(cohort, u)
+                    log.info(u"User '{}' was enrolled at cohort '{}'".format(u, group.edx_name))
+                except ValueError:
+                    # 'add_user_to_cohort' raises ValueError when user is already present in cohort, but it's ok
+                    pass
+                except User.DoesNotExist as e:
+                    error = {"username": u, "cohort": group.plp_name, "error": unicode(e)}
+                    errors.append(error)
+                    log.error(u"{}: {}".format(error['error'], error['username']))
+        if errors:
+            return Response(data={"failed": errors}, status=status.HTTP_400_BAD_REQUEST)
+        return Response()
