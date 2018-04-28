@@ -63,10 +63,14 @@ log = logging.getLogger(__name__)
 VERIFIED = 'verified'
 
 try:
-    from edx_proctoring.models import ProctoredExamStudentAttempt
-    from edx_proctoring.api import remove_exam_attempt
+    from edx_proctoring.models import ProctoredExamStudentAttempt, ProctoredExamStudentAttemptCustom, ProctoredCourse
+    from edx_proctoring.api import remove_exam_attempt, _get_exam_attempt, update_attempt_status
 except ImportError:
     ProctoredExamStudentAttempt = None
+    ProctoredExamStudentAttemptCustom = None
+    ProctoredCourse = None
+    _get_exam_attempt = None
+    update_attempt_status = None
 from .data import get_course_enrollments, get_user_proctored_exams, get_course_calendar
 from .models import CourseUserResultCache
 from .utils import student_grades, EdxPlpCohortName
@@ -165,6 +169,9 @@ class CourseListMixin(object):
                               OAuth2AuthenticationAllowInactiveUser)
     permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
+    def get_courses(self):
+        return modulestore().get_courses()
+
     def get_queryset(self):
         course_ids = self.request.query_params.get('course_id', None)
 
@@ -176,7 +183,7 @@ class CourseListMixin(object):
                 course_descriptor = courses.get_course(course_key)
                 results.append(course_descriptor)
         else:
-            results = modulestore().get_courses()
+            results = self.get_courses()
 
         proctoring_system = self.request.query_params.get('proctoring_system')
         if proctoring_system:
@@ -233,6 +240,12 @@ class CourseListWithExams(CourseListMixin, ListAPIView):
     Gets a list of courses with proctored exams
     """
     serializer_class = CourseWithExamsSerializer
+
+    def get_courses(self):
+        if ProctoredCourse:
+            return ProctoredCourse.fetch_all()
+        else:
+            return super(CourseListWithExams, self).get_courses()
 
 
 class SSOEnrollmentListView(EnrollmentListView):
@@ -1177,6 +1190,139 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
         response = HttpResponse(text, content_type=mime, status=200)
         response['Content-Disposition'] = 'attachment; filename="{}_calendar.ics"'.format(course_key_string)
         return response
+
+
+class AttemptStatuses(APIView):
+    """
+        **Use Cases**
+            This endpoint is called by a 3rd party proctoring review service to determine
+            status of an exam attempts.
+
+
+        **Example Requests**:
+
+            POST /api/extended/edx_proctoring/proctoring_poll_statuses_attempts/
+
+        **Post Parameters**
+
+            * JSON body in format {'attempts': ['<code_1>', '<code_2>', ... , '<code_n>']}
+
+        **Response Values**
+
+            200 - JSON response in format: {'<code_1>': '<status_1>', ..., '<code_n>': '<status_n>'}
+
+    """
+
+    def post(self, request):
+        """
+        Returns the statuses of an exam attempts.
+        Similar to the /api/edx_proctoring/proctoring_poll_status/<attempt_code> but for more than 1 attempt_code.
+        """
+
+        try:
+            posted_data = json.loads(request.body.decode('utf-8'))
+            attempts_codes = posted_data.get('attempts')
+            if not isinstance(attempts_codes, list):
+                raise ValueError("'attempts' value in JSON request must be list")
+            if not attempts_codes:
+                raise ValueError("'attempts' list is empty")
+        except (ValueError, KeyError) as e:
+            return HttpResponse(
+                content='Invalid request body.',
+                status=400
+            )
+
+        attempts_dict = {attempt_code: None for attempt_code in attempts_codes}
+        attempts = ProctoredExamStudentAttempt.objects.filter(attempt_code__in=attempts_codes)
+        for attempt in attempts:
+            exam_attempt = _get_exam_attempt(attempt)
+            attempts_dict[attempt.attempt_code] = exam_attempt['status'] if exam_attempt else None
+
+        attempt_custom_status_check = [attempt_code for attempt_code, attempt_status in attempts_dict.iteritems()
+                                       if attempt_status is None]
+        if attempt_custom_status_check:
+            attempts = ProctoredExamStudentAttemptCustom.objects.filter(attempt_code__in=attempt_custom_status_check)
+            for attempt in attempts:
+                attempts_dict[attempt.attempt_code] = attempt.status
+
+        log.info("Attempts statuses: {}".format(unicode(attempts_dict)))
+        return Response(
+            data=attempts_dict,
+            status=200
+        )
+
+
+class AttemptsBulkUpdate(APIView):
+    """
+        **Use Cases**
+            This endpoint is called by a 3rd party proctoring review service to update group of attempts.
+
+
+        **Example Requests**:
+
+            POST /api/extended/edx_proctoring/attempts_bulk_update/
+
+        **Post Parameters**
+
+            * JSON body in format
+               {'attempts': [
+                   {'code': '<code_1>', 'user_id': '<user_id_1>', 'new_status': '<new_status_1>'},
+                   ...
+                   {'code': '<code_n>', 'user_id': '<user_id_n>', 'new_status': '<new_status_n>'}
+               ]}
+
+        **Response Values**
+
+            200 - JSON response in format:
+            {
+             '<code_1>': {'status': '<new_status_1>'},
+             ...
+             '<code_n>': {'status': '<new_status_n>'}
+            }
+
+    """
+
+    permission_classes = (ApiKeyHeaderPermissionIsAuthenticated,)
+
+    def post(self, request):
+        """
+        Returns the statuses of an exam attempts.
+        """
+
+        try:
+            posted_data = json.loads(request.body.decode('utf-8'))
+            attempts = posted_data.get('attempts')
+            if not isinstance(attempts, list):
+                raise ValueError("'attempts' value in JSON request must be list")
+            if not attempts:
+                raise ValueError("'attempts' list is empty")
+        except (ValueError, KeyError) as e:
+            return HttpResponse(
+                content='Invalid request body.',
+                status=400
+            )
+
+        result = {}
+        attempts_dict = {attempt['code']: attempt for attempt in attempts}
+        attempts = ProctoredExamStudentAttempt.objects.filter(attempt_code__in=attempts_dict.keys())
+        for attempt in attempts:
+            user_id = attempts_dict[attempt.attempt_code]['user_id']
+            new_status = attempts_dict[attempt.attempt_code]['new_status']
+
+            try:
+                update_attempt_status(attempt.proctored_exam_id, user_id, new_status)
+                result[attempt.attempt_code] = {'status': new_status}
+            except Exception, e:
+                log.info("Exception during update status (new status '{}') for user_id={} attempt_id={}: {}"
+                         .format(unicode(new_status), unicode(user_id), unicode(attempt.id), unicode(e)))
+                result[attempt.attempt_code] = {'status': attempt.status}
+
+        log.info("New attempts statuses after update: {}".format(unicode(result)))
+
+        return Response(
+            data=result,
+            status=200
+        )
 
 
 class CohortValidationMixin(object):

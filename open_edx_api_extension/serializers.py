@@ -39,6 +39,12 @@ class CourseWithExamsSerializer(CourseSerializer):
         self.include_expired = kwargs.pop("include_expired", False)
         super(CourseWithExamsSerializer, self).__init__(*args, **kwargs)
 
+    def get_image_url(self, course):
+        """ Get the course image URL """
+        if hasattr(course, 'image_url'):
+            return course.image_url
+        return super(CourseWithExamsSerializer, self).get_image_url(course)
+
     def to_representation(self, instance):
         """
         Object instance -> Dict of primitive datatypes.
