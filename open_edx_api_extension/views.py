@@ -31,7 +31,7 @@ from xmodule.modulestore.django import modulestore
 
 from openedx.core.djangoapps.course_groups.cohorts import (
     is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
-    get_cohort_names, get_course_cohorts, CourseCohort
+    get_cohort_names, get_course_cohorts, CourseCohort,
 )
 from .edx_release import set_course_cohort_settings
 from openedx.core.djangoapps.course_groups.models import CourseUserGroup
@@ -114,6 +114,7 @@ class CourseUserResult(CourseViewMixin, RetrieveAPIView):
                 * percent: A float percentage in the breakdown. All percents should add up to the final percentage.
                 * detail: A string explanation of this breakdown. E.g. "Homework - 10% of a possible 15%".
     """
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
 
     @CourseViewMixin.course_check
     def get(self, request, **kwargs):

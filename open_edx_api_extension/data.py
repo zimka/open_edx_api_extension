@@ -28,7 +28,7 @@ def get_course_enrollments(user_id=None, **kwargs):
     if user_id is not None:
         qset = qset.filter(user__username=user_id)
     qset = qset.order_by('created')
-    return CourseEnrollmentSerializer(qset).data  # pylint: disable=no-member
+    return [CourseEnrollmentSerializer(x).data for x in qset] # pylint: disable=no-member
 
 
 def get_user_proctored_exams(username, request):
