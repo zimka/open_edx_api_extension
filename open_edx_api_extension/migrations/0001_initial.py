@@ -2,6 +2,7 @@
 from __future__ import unicode_literals
 
 from django.db import migrations, models
+import uuid
 
 
 class Migration(migrations.Migration):
@@ -11,12 +12,10 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='CourseResultCache',
+            name='InstructorTaskExtendedKwargs',
             fields=[
-                ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('username', models.CharField(max_length=255)),
-                ('course_id', models.CharField(max_length=255)),
-                ('data', models.TextField()),
+                ('id', models.UUIDField(default=uuid.uuid4, serialize=False, editable=False, primary_key=True)),
+                ('jsonized_kwargs', models.TextField()),
             ],
         ),
     ]
