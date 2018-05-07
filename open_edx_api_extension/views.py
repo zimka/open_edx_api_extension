@@ -932,6 +932,7 @@ class CourseCalendar(APIView, ApiKeyPermissionMixIn):
 
         username = request.GET.get("username", None)
         log.info(request.user)
+        # TODO: simplify or uncomment
         if username:
             try:
                 if request.user.is_staff:
