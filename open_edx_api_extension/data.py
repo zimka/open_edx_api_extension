@@ -63,7 +63,7 @@ def get_user_proctored_exams(username, request):
             course_id=enrollment.course_id,
             users__username=username,
             group_type=CourseUserGroup.COHORT,
-            name=VERIFIED
+            name__startswith=VERIFIED
         )
 
         if course_id not in course_ids and cohorts.exists():
