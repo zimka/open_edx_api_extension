@@ -19,5 +19,6 @@ urlpatterns = [
     url(r'^user_proctored_exam_attempt/(?P<attempt_code>[^/]*)/$', views.ProctoredExamsAttemptView.as_view()),
     url(r'^calendar/{}'.format(settings.COURSE_KEY_PATTERN), views.CourseCalendar.as_view(), name="course-calendar"),
     url(r'^cohorts/cohort_names', views.CourseCohortNames.as_view()),
-    url(r'^cohorts/cohorts_with_students', views.CourseCohortsWithStudents.as_view())
+    url(r'^cohorts/cohorts_with_students', views.CourseCohortsWithStudents.as_view()),
+    url(r'^certificate/{}/'.format(settings.COURSE_KEY_PATTERN), views.CertificateStudent.as_view(), name="certificate"),
 ]

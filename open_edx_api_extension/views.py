@@ -1,64 +1,53 @@
-import json
 import logging
 
-from django.core.exceptions import ObjectDoesNotExist
-from django.conf import settings
-from django.http import HttpResponse
-from django.db import transaction
-from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import ensure_csrf_cookie
-from django.http import JsonResponse
-
-from rest_framework.generics import RetrieveAPIView, ListAPIView
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework import status
-
 from bulk_email.models import Optout
-
-from openedx.core.djangoapps.cors_csrf.decorators import ensure_csrf_cookie_cross_domain
+from certificates.api import cert_generation_enabled
+from certificates.models import CertificateStatuses
 from course_modes.models import CourseMode
 from course_structure_api.v0 import serializers
-from course_structure_api.v0.views import CourseViewMixin
 from courseware import courses
-
+from courseware.views.views import _get_cert_data, is_course_passed, CourseGradeFactory
+from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
+from django.http import HttpResponse
+from django.http import JsonResponse
+from django.utils.decorators import method_decorator
 from django_comment_common.models import Role, FORUM_ROLE_STUDENT
-from openedx.core.djangoapps.embargo import api as embargo_api
-from opaque_keys.edx.keys import CourseKey
-from opaque_keys import InvalidKeyError
-from student.models import User, CourseEnrollment, CourseAccessRole
-from xmodule.modulestore.django import modulestore
-
-from openedx.core.djangoapps.course_groups.cohorts import (
-    is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, remove_user_from_cohort, get_cohort_by_name,
-    get_cohort_names, get_course_cohorts, CourseCohort,
-)
-from .edx_release import set_course_cohort_settings
-from openedx.core.djangoapps.course_groups.models import CourseUserGroup
-from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
-from openedx.core.lib.api.authentication import (
-    SessionAuthenticationAllowInactiveUser,
-    OAuth2AuthenticationAllowInactiveUser,
-)
-from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated, ApiKeyHeaderPermission
-
 from enrollment import api
 from enrollment.errors import (
     CourseEnrollmentError,
     CourseModeNotFoundError, CourseEnrollmentExistsError
 )
 from enrollment.views import ApiKeyPermissionMixIn, EnrollmentCrossDomainSessionAuth, EnrollmentListView
-from lms.djangoapps.instructor.views.api import require_level
-from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
-from lms.djangoapps.instructor_task.models import ReportStore
-
-
-from track import views as track_views
-
+from instructor_task.api import generate_certificates_for_students
+from opaque_keys import InvalidKeyError
+from opaque_keys.edx.keys import CourseKey
 from open_edx_api_extension.serializers import CourseWithExamsSerializer
+from rest_framework import status
+from rest_framework.generics import ListAPIView
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from student.models import User, CourseEnrollment, CourseAccessRole
+from track import views as track_views
+from xmodule.modulestore.django import modulestore
 
+from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
+from openedx.core.djangoapps.cors_csrf.decorators import ensure_csrf_cookie_cross_domain
+from openedx.core.djangoapps.course_groups.cohorts import (
+    is_course_cohorted, is_cohort_exists, add_cohort, add_user_to_cohort, get_cohort_by_name,
+    get_cohort_names, get_course_cohorts, CourseCohort,
+)
+from openedx.core.djangoapps.course_groups.models import CourseUserGroup
+from openedx.core.djangoapps.embargo import api as embargo_api
+from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
+from openedx.core.lib.api.authentication import (
+    SessionAuthenticationAllowInactiveUser,
+    OAuth2AuthenticationAllowInactiveUser,
+)
+from openedx.core.lib.api.permissions import ApiKeyHeaderPermissionIsAuthenticated, ApiKeyHeaderPermission
+from .edx_release import set_course_cohort_settings
 from .tasks import submit_calculate_grades_csv_users
-from .utils import get_custom_grade_config
 
 log = logging.getLogger(__name__)
 VERIFIED = 'verified'
@@ -1148,3 +1137,140 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
         if errors:
             return Response(data={"failed": errors}, status=status.HTTP_400_BAD_REQUEST)
         return Response()
+
+
+CERTIFICATION_API_STATUSES = (
+    CertificateStatuses.unavailable,
+    CertificateStatuses.notpassing,
+    CertificateStatuses.requesting,
+    CertificateStatuses.generating,
+    CertificateStatuses.downloadable,
+    CertificateStatuses.error,
+)
+
+
+class CertificateStudent(APIView):
+    """
+    ** Use Cases **
+
+        Get certification status for specific user
+
+        Post to generate certificate for user
+
+    ** Example Requests **
+
+        GET /api/extended/certificate/course-v1:A+B+C?username=usertest
+
+        POST /api/extended/certificate/course-v1:A+B+C{
+
+            "username":"usertest"
+        }
+
+    ** GET Response Values **
+
+        400 - {"error": <reason: bad username or course_id>}
+
+        200 - {
+
+            "status":" <API_CERTIFICATION_STATUSES>
+
+            "url": download url, when status is downloadable only
+
+        }
+
+    ** POST Response Values""
+
+        400 - {"error": <reason: bad username or course_id or user status is not 'requestable'>}
+
+        200 - {"status": "generating"}
+    """
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
+    @staticmethod
+    def _get_key(course_id):
+        try:
+            course_key = CourseKey.from_string(course_id)
+            if modulestore().has_course(course_key):
+                return course_key
+        except (InvalidKeyError, AttributeError) as e:
+            pass
+
+    @staticmethod
+    def _get_user(username):
+        try:
+            return User.objects.get(username=username)
+        except User.DoesNotExist:
+            pass
+
+    def _get_error_response(self, data, course_id):
+
+        course_key = self._get_key(course_id)
+        if not course_key:
+            return Response(
+                {"error": "course with id '{}' not found".format(course_id)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not cert_generation_enabled(course_key):
+            return Response({"status": CertificateStatuses.unavailable})
+        username = data.get('username', None)
+        user = self._get_user(username)
+        if not user:
+            return Response(
+                {"error": "user with username '{}' not found".format(username)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        enrollment_mode, is_active = CourseEnrollment.enrollment_mode_for_user(user, course_key)
+        if not enrollment_mode or not is_active:
+            return Response(
+                {"error": "user with username '{}' is not enrolled or is not active".format(username)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        course = modulestore().get_course(course_key)
+        cert_data = _get_cert_data(user, course, course_key, is_active, enrollment_mode)
+        if cert_data.cert_status == CertificateStatuses.requesting:
+            grade_summary = CourseGradeFactory().create(user, course).summary
+            if not is_course_passed(course, grade_summary):
+                cert_data = cert_data._replace(cert_status=CertificateStatuses.notpassing)
+        return cert_data
+
+    def get(self, request, course_key_string):
+        result = self._get_error_response(request.query_params, course_key_string)
+        if isinstance(result, Response):
+            return result
+        cert_status = result.cert_status
+        if cert_status not in CERTIFICATION_API_STATUSES:
+            cert_status = CertificateStatuses.error
+        data = {"status": cert_status}
+        url = result.download_url or result.cert_web_view_url
+        if url:
+            data['url'] = settings.LMS_ROOT_URL + url
+        return Response(data)
+
+    def post(self, request, course_key_string):
+        result = self._get_error_response(request.data, course_key_string)
+        if isinstance(result, Response):
+            return result
+        cert_status = result.cert_status
+        if cert_status not in CERTIFICATION_API_STATUSES:
+            cert_status = CertificateStatuses.error
+        if cert_status != CertificateStatuses.requesting:
+            return Response(
+                {"error": "Can't generate certificate for user with cert status '{}'".format(cert_status)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        request.user = self._get_user('staff')
+        generate_certificates_for_students(
+            request,
+            self._get_key(course_key_string),
+            student_set="specific_student",
+            specific_student_id=self._get_user(request.data.get('username')).id
+        )
+        return Response({"status": CertificateStatuses.generating}, status=status.HTTP_200_OK)
