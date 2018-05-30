@@ -83,7 +83,7 @@ class UsersCourseGradeReport(CourseGradeReport):
         find_by_name = lambda name: get_first([url for filename, url in files_urls_pairs if name in filename])
 
         report_name = self.REPORT_NAME_TEMPLATE.format(task_id=context.task_id)
-        err_report_name = self.REPORT_NAME_TEMPLATE.format(task_id=context.task_id)
+        err_report_name = self.ERR_REPORT_NAME_TEMPLATE.format(task_id=context.task_id)
 
         csv_url = find_by_name(report_name)
         csv_err_url = find_by_name(err_report_name)

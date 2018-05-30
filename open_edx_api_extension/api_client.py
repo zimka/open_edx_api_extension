@@ -117,6 +117,7 @@ class PlpApiClient(object):
             plp_response = requests.delete(request_url, data=data, headers=headers)
 
         if plp_response.ok:
+            log.info("PlpApiClient Ok: ({}, {})".format(request_url, str(data)))
             return _get_json(plp_response)
         else:
             message = "PlpApiClient error: request ({}, {});".format(request_url, str(data))
