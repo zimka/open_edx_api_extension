@@ -1235,6 +1235,8 @@ class CertificateStudent(APIView):
 
         course = modulestore().get_course(course_key)
         cert_data = _get_cert_data(user, course, course_key, is_active, enrollment_mode)
+        if enrollment_mode != CourseMode.VERIFIED:
+            cert_data = cert_data._replace(cert_status=CertificateStatuses.unavailable)
         if cert_data.cert_status == CertificateStatuses.requesting:
             grade_summary = CourseGradeFactory().create(user, course).summary
             if not is_course_passed(course, grade_summary):
