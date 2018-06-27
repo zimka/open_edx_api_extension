@@ -51,6 +51,9 @@ from lms.djangoapps.instructor.views.api import require_level
 from lms.djangoapps.instructor_task.api_helper import AlreadyRunningError
 from lms.djangoapps.instructor_task.models import ReportStore
 
+from course_blocks.api import get_course_blocks
+from django.contrib.auth import get_user_model
+
 
 from track import views as track_views
 
@@ -1520,3 +1523,78 @@ class CourseCohortsWithStudents(CohortValidationMixin, APIView):
         if errors:
             return Response(data={"failed": errors}, status=status.HTTP_400_BAD_REQUEST)
         return Response()
+
+class CourseStructure(APIView):
+    """
+        **Use Cases**
+
+            Allows to get course structure
+
+        **Example Requests**:
+
+            GET  /api/extended/course_structure
+
+        **Get Parameters**
+
+            * course_id: The unique identifier for the course.
+
+        **Get Response Values**
+
+            400 - bad course_id or absent,
+
+            200 - {"course_id": "course-v1:...",
+                   "structure": [
+                                  {"chapter_key":"...", "section_key":"...","vertical_key":"...","ckey":"...","chapter_name":"..."},
+                                  ...
+                              ]
+                  }
+    """
+    authentication_classes = OAuth2AuthenticationAllowInactiveUser, SessionAuthenticationAllowInactiveUser
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+
+    @classmethod
+    def as_view(cls, **initkwargs):
+        return transaction.non_atomic_requests()(super(cls, cls).as_view(**initkwargs))
+
+    def get(self, request):
+        def get_course_by_id(course_id):
+            try:
+                course_key = CourseKey.from_string(course_id)
+            except (InvalidKeyError, AttributeError) as e:
+                return None
+
+            if not modulestore().has_course(course_key):
+                return None
+
+            return modulestore().get_course(course_key)
+
+        def get_course_structure(course):
+            User = get_user_model()
+            student = User.objects.filter(is_superuser=True).first()
+            return get_course_blocks(student, course.location)
+
+
+        course = get_course_by_id(request.query_params.get('course_id'))
+        if not course:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        response = {
+            "course_id": unicode(course.id),
+            "structure": [],
+        }
+
+        course_structure = get_course_structure(course)
+        for chapter_key in course_structure.get_children(course_structure.root_block_usage_key):
+            chapter_name = modulestore().get_item(chapter_key).display_name
+            for section_key in course_structure.get_children(chapter_key):
+                for vertical_key in course_structure.get_children(section_key):
+                    for ckey in course_structure.get_children(vertical_key):
+                        response["structure"].append({
+                            "chapter_key":  unicode(chapter_key),
+                            "section_key":  unicode(section_key),
+                            "vertical_key": unicode(vertical_key),
+                            "ckey":         unicode(ckey),
+                            "chapter_name": unicode(chapter_name),
+                        })
+
+        return Response(data=response)
