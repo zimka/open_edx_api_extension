@@ -21,8 +21,8 @@ class PlpApiClient(object):
     PLP_API_URLS = {
         "shift_group":"/api/course-shift-changed/",
         "shift_membership":"/api/user-course-shift-changed/",
-        "shift_settings":"/api/course-shift-settings-changed/"
-
+        "shift_settings":"/api/course-shift-settings-changed/",
+        "betatest_leeway":"/api/course-betatest-leeway/"
     }
 
     def __init__(self):
@@ -95,6 +95,16 @@ class PlpApiClient(object):
         if requester and not requester.is_anonymous():
             requester_name = requester.username
         data["requester"] = requester_name
+        self._post(url, data)
+
+    def push_betatest_leeway(self, course_key, value):
+        url = self.PLP_API_URLS["betatest_leeway"]
+        if value is None:
+            value = 0
+        data = {
+            "course_id": str(course_key),
+            "days": int(value)
+        }
         self._post(url, data)
 
     def _post(self, path, data, is_json=False):
