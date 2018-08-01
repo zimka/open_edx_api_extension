@@ -113,6 +113,14 @@ class PlpApiClient(object):
     def _delete(self, path, data, is_json=False):
         return self._request(path, data, is_json, delete=True)
 
+    def push_course_user_group_changed(self, course_id, username, group_name):
+        data = {}
+        data['course_id'] = str(course_id)
+        data['username'] = username
+        data['group_name'] = group_name
+        self._request('api/user-add-group', data, False)
+
+
     def _request(self, path, data, is_json, delete=False):
         headers = {'x-plp-api-key': self.api_key}
         if is_json:
